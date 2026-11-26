@@ -6,7 +6,6 @@ import os
 import shutil
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -88,14 +87,15 @@ def main() -> int:
                 entry,
             ]
         )
-        zip_path = release_dir / "ADO-Agent-macos.zip"
+        stage_dir = release_dir / "_macos_stage"
+        stage_dir.mkdir(parents=True, exist_ok=True)
         app_bundle = dist_dir / "ADO-Agent.app"
         cli_bin = dist_dir / "ado-agent-cli"
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for p in app_bundle.rglob("*"):
-                arc = Path("ADO-Agent.app") / p.relative_to(app_bundle)
-                zf.write(p, arcname=str(arc))
-            zf.write(cli_bin, arcname="ado-agent-cli")
+        subprocess.run(["cp", "-a", str(app_bundle), str(stage_dir / "ADO-Agent.app")], check=True)
+        subprocess.run(["cp", "-a", str(cli_bin), str(stage_dir / "ado-agent-cli")], check=True)
+        zip_path = release_dir / "ADO-Agent-macos.zip"
+        subprocess.run(["zip", "-ry", str(zip_path), "."], cwd=stage_dir, check=True)
+        shutil.rmtree(stage_dir, ignore_errors=True)
         print(f"Kész macOS csomag (.app + CLI): {zip_path}")
 
     else:

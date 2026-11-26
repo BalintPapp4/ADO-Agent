@@ -77,6 +77,9 @@ jobs:
         run: |
           chmod +x "${{ matrix.smoke_bin }}" || true
           python scripts/smoke_check.py "${{ matrix.smoke_bin }}"
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            python scripts/smoke_check.py "dist/ADO-Agent.app/Contents/MacOS/ADO-Agent"
+          fi
 
       - name: Artifact feltöltése
         uses: actions/upload-artifact@v4
