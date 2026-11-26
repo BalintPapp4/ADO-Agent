@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_name }} — Magyar & EU Adózási Törvényjavaslat-figyelő</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="logo-badge">ADÓ</div>
+        <div>
+          <h1>{{ app_name }} <span class="ver">v{{ version }}</span></h1>
+          <p class="subtitle">Magyar &amp; EU adózási törvényjavaslatok • Robin Hood adó • SZJA • ÁFA</p>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="btn-scan" class="btn btn-primary" type="button">
+          <span class="btn-icon">⟳</span> Ellenőrzés most
+        </button>
+
+        <div class="dropdown">
+          <button id="btn-export-toggle" class="btn btn-secondary" type="button">
+            ⬇ Exportálás ▾
+          </button>
+          <div id="export-menu" class="dropdown-menu hidden">
+            <a data-fmt="xlsx" href="#">Excel munkafüzet (.xlsx)</a>
+            <a data-fmt="csv" href="#">CSV táblázat (.csv)</a>
+            <a data-fmt="html" href="#">HTML riport (.html)</a>
+            <a data-fmt="md" href="#">Markdown összefoglaló (.md)</a>
+            <a data-fmt="json" href="#">JSON adatfájl (.json)</a>
+          </div>
+        </div>
+
+        <button id="btn-sources" class="btn btn-secondary" type="button">
+          🌐 Források
+        </button>
+        <button id="btn-settings" class="btn btn-secondary" type="button">
+          ⚙ Kulcsszavak &amp; Ütemezés
+        </button>
+        <button id="btn-shutdown" class="btn btn-danger-outline" type="button" title="Alkalmazás biztonságos bezárása">
+          ⏻ Kilépés
+        </button>
+      </div>
+    </div>
+
+    <div id="progress-banner" class="progress-banner hidden">
+      <div class="progress-inner">
+        <span id="progress-text">Ellenőrzés folyamatban...</span>
+        <div class="progress-track">
+          <div id="progress-bar" class="progress-fill" style="width: 10%"></div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- KPI Kártyák -->
+    <section class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Összes adózási találat</div>
+        <div class="kpi-value" id="kpi-total">0</div>
+        <div class="kpi-sub" id="kpi-jurisdiction">HU: 0 • EU: 0</div>
+      </div>
+      <div class="kpi-card kpi-highlight-green">
+        <div class="kpi-label">Új / Frissült (olvasatlan)</div>
+        <div class="kpi-value" id="kpi-new">0</div>
+        <div class="kpi-sub" id="kpi-unread">Olvasatlan összesen: 0</div>
+      </div>
+      <div class="kpi-card kpi-highlight-red">
+        <div class="kpi-label">Törvényjavaslatok / Tervezetek</div>
+        <div class="kpi-value" id="kpi-bills">0</div>
+        <div class="kpi-sub">T/ irományok, COM javaslatok, tervezetek</div>
+      </div>
+      <div class="kpi-card kpi-highlight-amber">
+        <div class="kpi-label">Kiemelt (Könyvjelzős)</div>
+        <div class="kpi-value" id="kpi-bookmarked">0</div>
+        <div class="kpi-sub" id="kpi-lastrun">Még nem futott ellenőrzés</div>
+      </div>
+    </section>
+
+    <!-- Forrás állapotok -->
+    <section class="panel sources-strip">
+      <div class="panel-header">
+        <h2>Figyelt források állapota</h2>
+        <span class="muted small">Adatkönyvtár: <code>{{ data_dir }}</code></span>
+      </div>
+      <div id="source-status-pills" class="source-pills"></div>
+    </section>
+
+    <!-- Szűrők -->
+    <section class="panel filters-panel">
+      <div class="filters-row">
+        <div class="search-box">
+          <input id="filter-search" type="search" placeholder="Keresés címben, törvényszámban (pl. T/123, COM), kulcsszóban vagy jegyzetben...">
+        </div>
+
+        <select id="filter-jurisdiction" aria-label="Joghatóság">
+          <option value="">Joghatóság: Mind (HU + EU)</option>
+          <option value="HU">Csak Magyarország (HU)</option>
+          <option value="EU">Csak Európai Unió (EU)</option>
+        </select>
+
+        <select id="filter-source" aria-label="Forrás">
+          <option value="">Forrás: Összes</option>
+        </select>
+
+        <select id="filter-sort" aria-label="Rendezés">
+          <option value="relevance">Rendezés: Relevancia &amp; Újdonság</option>
+          <option value="newest">Rendezés: Legfrissebb észlelés</option>
+          <option value="published">Rendezés: Közzététel dátuma</option>
+        </select>
+      </div>
+
+      <div id="category-chips" class="chips-row"></div>
+
+      <div class="toggles-row">
+        <label class="toggle-chip">
+          <input type="checkbox" id="filter-only-new"> Csak újak / frissültek
+        </label>
+        <label class="toggle-chip">
+          <input type="checkbox" id="filter-only-bills"> Csak törvényjavaslatok / tervezetek
+        </label>
+        <label class="toggle-chip">
+          <input type="checkbox" id="filter-only-bookmarked"> Csak kiemeltek (★)
+        </label>
+        <div class="spacer"></div>
+        <button id="btn-mark-all-read" class="btn btn-ghost btn-sm" type="button">
+          ✓ Mind olvasottnak jelölése
+        </button>
+      </div>
+    </section>
+
+    <!-- Találatok -->
+    <section id="items-section">
+      <div class="results-header">
+        <h2 id="results-count">Találatok (0)</h2>
+      </div>
+      <div id="items-list" class="items-list"></div>
+    </section>
+  </main>
+
+  <!-- Források kezelése modal -->
+  <div id="modal-sources" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Figyelt jogszabály- és hírforrások</h3>
+        <button class="modal-close" data-close="modal-sources" type="button">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted">Kapcsold be vagy ki a beépített magyar és EU-s forrásokat, vagy adj hozzá saját weboldalt / RSS hírfolyamot.</p>
+        <div id="sources-manager-list" class="sources-manager-list"></div>
+
+        <hr>
+        <h4>+ Új egyéni forrás hozzáadása</h4>
+        <form id="form-add-source" class="add-source-form">
+          <input id="new-src-name" type="text" placeholder="Név (pl. Pénzügyminisztérium hírek)" required>
+          <input id="new-src-url" type="url" placeholder="https://..." required>
+          <select id="new-src-jur">
+            <option value="HU">HU (Magyar)</option>
+            <option value="EU">EU</option>
+          </select>
+          <select id="new-src-adapter">
+            <option value="web">Weboldal / Automatikus</option>
+            <option value="rss">RSS / Atom feed</option>
+          </select>
+          <button class="btn btn-primary" type="submit">Hozzáadás</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Kulcsszavak & Ütemezés modal -->
+  <div id="modal-settings" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Kulcsszavak, Kategóriák &amp; Ütemezés</h3>
+        <button class="modal-close" data-close="modal-settings" type="button">✕</button>
+      </div>
+      <div class="modal-body">
+        <h4>Beépített adózási figyelési területek</h4>
+        <div id="builtin-categories-list" class="builtin-cats-grid"></div>
+
+        <hr>
+        <h4>Egyéni kulcsszavak</h4>
+        <p class="muted">Ha saját szakterületi adót vagy kifejezést is figyelni szeretnél (pl. <em>gyógyszerkülönadó</em>, <em>kiskereskedelmi adó</em>, <em>e-nyugta</em>), írd be alább:</p>
+        <div class="kw-add-row">
+          <input id="new-kw-input" type="text" placeholder="Új kulcsszó vagy kifejezés...">
+          <button id="btn-add-kw" class="btn btn-secondary" type="button">+ Hozzáadás</button>
+        </div>
+        <div id="custom-kw-tags" class="kw-tags"></div>
+
+        <hr>
+        <h4>Automatikus háttér-ellenőrzés</h4>
+        <div class="schedule-row">
+          <label for="auto-scan-select">Időköz (amíg az ADÓ Agent fut):</label>
+          <select id="auto-scan-select">
+            <option value="0">Kikapcsolva (csak kézi ellenőrzés)</option>
+            <option value="30">30 percenként</option>
+            <option value="60">Óránként</option>
+            <option value="240">4 óránként</option>
+            <option value="720">12 óránként</option>
+            <option value="1440">Naponta (24 óránként)</option>
+          </select>
+        </div>
+
+        <div class="modal-footer">
+          <button id="btn-save-settings" class="btn btn-primary" type="button">Beállítások mentése</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

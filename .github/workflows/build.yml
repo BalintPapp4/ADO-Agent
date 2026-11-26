@@ -1,0 +1,108 @@
+name: Build & Test ADÓ Agent (Windows, macOS, Linux)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: "Release létrehozása az elkészült futtatható fájlokból"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Tesztek (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.11 beállítása
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Függőségek telepítése
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Tesztek futtatása (pytest)
+        run: pytest -v
+
+  build:
+    name: Futtatható fájl építése (${{ matrix.os }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: ADO-Agent-windows-x64
+            smoke_bin: release_artifacts/ADO-Agent-windows-x64.exe
+          - os: macos-latest
+            artifact_name: ADO-Agent-macos
+            smoke_bin: dist/ado-agent-cli
+          - os: ubuntu-latest
+            artifact_name: ADO-Agent-linux-x64
+            smoke_bin: release_artifacts/ADO-Agent-linux-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.11 beállítása
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Függőségek telepítése
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: PyInstaller build futtatása
+        run: python scripts/build_executable.py
+
+      - name: Smoke teszt a lefordított binárison
+        shell: bash
+        run: |
+          chmod +x "${{ matrix.smoke_bin }}" || true
+          python scripts/smoke_check.py "${{ matrix.smoke_bin }}"
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            python scripts/smoke_check.py "dist/ADO-Agent.app/Contents/MacOS/ADO-Agent"
+          fi
+
+      - name: Artifact feltöltése
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release_artifacts/*
+
+  release:
+    name: GitHub Release közzététele
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Artifactok letöltése
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+          merge-multiple: true
+
+      - name: Release létrehozása
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}"
+          name: "ADÓ Agent ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}"
+          generate_release_notes: true
+          files: "all-artifacts/*"
