@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / PyInstaller
+build/
+dist/
+*.egg-info/
+*.spec
+release_artifacts/
+
+# Testing / tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local app data / runtime artifacts
+*.db
+*.sqlite
+*.sqlite3
+exports/
+data/
+.DS_Store
+Thumbs.db
