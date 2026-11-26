@@ -85,16 +85,24 @@ class TaxScanner:
             if out.ok_requests == 0 and out.errors:
                 status = "error"
                 msg = "; ".join(out.errors[:3])
-            elif out.warnings or out.errors:
+            elif out.warnings:
                 status = "warning"
                 parts = list(out.warnings[:2]) + list(out.errors[:2])
                 msg = " | ".join(parts)
+            elif out.errors and len(out.candidates) == 0:
+                status = "warning"
+                msg = " | ".join(out.errors[:3])
+            elif len(out.candidates) == 0:
+                status = "warning"
+                msg = "Az oldal válaszolt, de nem találtunk feldolgozható listaelemet."
             else:
                 status = "ok"
                 msg = (
                     f"{len(out.candidates)} nyers elem feldolgozva, "
                     f"{len(matched)} adózási találat."
                 )
+                if out.errors:
+                    msg += f" ({len(out.errors)} másodlagos URL sikertelen)"
 
             res = SourceScanResult(
                 source_id=src.id,

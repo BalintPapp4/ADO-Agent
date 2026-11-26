@@ -34,18 +34,30 @@ Minden találatot automatikusan pontoz, kategorizál és kiemeli az egyező kulc
 
 ---
 
-## Letöltés és futtatás (Windows & Mac)
+## Letöltés és futtatás (Windows & Mac — 1 kattintással!)
 
 ### 1. Előre fordított futtatható fájlok (GitHub Actions / Releases)
 
 A `.github/workflows/build.yml` workflow minden feltöltéskor automatikusan lefordítja:
-- **Windows:** `ADO-Agent-windows-x64.exe` (duplakattintásra elindul és megnyitja a böngészőben az irányítópultot)
-- **macOS:** `ADO-Agent-macos.zip` (benne az `ADO-Agent.app` és a terminálos `ado-agent-cli`)
-- **Linux:** `ADO-Agent-linux-x64`
+- **Windows (`ADO-Agent-windows-x64`):**
+  - `ADO-Agent-windows-x64.exe` — közvetlen indítás (megnyitja a böngészőt és automatikusan frissít)
+  - `Inditas-Windows.bat` — 1 kattintásos Windows CMD indító (`.exe`-vel vagy forráskódból automatikus `.venv` telepítéssel)
+  - `ADO-Agent-CMD-Segito.bat` — interaktív Windows CMD menü (webes indítás, azonnali Excel export, forráslistázás, adatmappa)
+- **macOS (`ADO-Agent-macos`):**
+  - `ADO-Agent.app` — duplakattintásos macOS alkalmazás
+  - `ado-agent-cli` — Terminálból hívható bináris
+  - `Inditas-Mac.command` — 1 kattintásos macOS Terminal indító (automatikus Gatekeeper `xattr` feloldással!)
+  - `ADO-Agent-Mac-Terminal-Segito.command` — interaktív macOS Terminal menü
+- **Linux (`ADO-Agent-linux-x64`):** önálló futtatható bináris
 
-> **Megjegyzés macOS esetén:** Mivel a közösségi/GitHub build nem rendelkezik fizetős Apple Developer tanúsítvánnyal, első indításkor a Gatekeeper figyelmeztethet: jobb klikk az `ADO-Agent.app`-ra → **Megnyitás** (vagy `xattr -cr ADO-Agent.app`).
+> **1 kattintásos Asztali parancsikon:** Az alkalmazás tetején a **„⌘ Indítók (CMD / Mac)”** gombra kattintva közvetlenül az Asztalodra is létrehozhatod vagy letöltheted a saját gépedre szabott Windows `.bat` vagy macOS `.command` parancsikonokat!
 
-### 2. Futtatás forráskódból (Fejlesztői mód)
+### 2. Futtatás forráskódból (Fejlesztői mód vagy letöltött ZIP)
+
+- **Windows:** dupla kattintás az `Inditas-Windows.bat` vagy az `ADO-Agent-CMD-Segito.bat` fájlra.
+- **macOS:** dupla kattintás az `Inditas-Mac.command` vagy az `ADO-Agent-Mac-Terminal-Segito.command` fájlra (első letöltés után ha nem indul: `chmod +x *.command`).
+
+Vagy kézzel parancssorból:
 
 ```bash
 python -m venv .venv

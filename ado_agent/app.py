@@ -128,14 +128,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # Alapértelmezett asztali / böngészős mód
-    first_run = db.get_latest_scan_run() is None and not args.no_auto_scan
+    first_run = db.get_latest_scan_run() is None
+    should_auto_scan = (first_run or config.scan_on_every_start) and not args.no_auto_scan
     run_web_server(
         config=config,
         db=db,
         host=args.host,
         port=args.port,
         open_browser=not args.no_browser,
-        scan_on_start=first_run,
+        scan_on_start=should_auto_scan,
     )
     return 0
 

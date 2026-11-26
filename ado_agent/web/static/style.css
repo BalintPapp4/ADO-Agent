@@ -294,6 +294,80 @@ body {
   font-size: 0.96rem;
 }
 
+.header-meta-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.launcher-highlight-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+}
+
+.launcher-download-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+}
+
+.launcher-dl-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-alt);
+  text-decoration: none;
+  color: var(--text);
+}
+
+.launcher-dl-card:hover {
+  border-color: var(--primary);
+  background: #f0fdf4;
+}
+
+.cmd-snippets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cmd-box {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.cmd-box code {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  word-break: break-all;
+  color: #0f172a;
+}
+
+.schedule-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.badge-read {
+  background: #e2e8f0;
+  color: #475569;
+}
+
 .muted {
   color: var(--muted);
 }

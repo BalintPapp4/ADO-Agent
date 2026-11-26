@@ -27,6 +27,17 @@ from ..exporter import (
     export_items_markdown,
     export_items_xlsx,
 )
+from ..launchers import (
+    create_desktop_launchers,
+    detect_runtime_target,
+    generate_mac_excel_command,
+    generate_mac_menu_command,
+    generate_mac_terminal_command,
+    generate_windows_cmd_excel_bat,
+    generate_windows_cmd_menu_bat,
+    generate_windows_web_bat,
+    open_folder_in_os,
+)
 from ..models import SourceConfig
 from ..scanner import TaxScanner
 from ..storage import Database
@@ -182,7 +193,13 @@ def create_app(
         )
         return jsonify(
             {
-                "app": {"name": __app_name__, "version": __version__, "data_dir": str(config.data_dir)},
+                "app": {
+                    "name": __app_name__,
+                    "version": __version__,
+                    "data_dir": str(config.data_dir),
+                    "db_path": str(config.db_path),
+                    "runtime": detect_runtime_target(),
+                },
                 "scan_status": coordinator.get_status(),
                 "latest_run": db.get_latest_scan_run(),
                 "stats": db.get_stats(),
@@ -190,6 +207,7 @@ def create_app(
                 "sources": [s.to_dict() for s in config.sources],
                 "custom_keywords": config.custom_keywords,
                 "auto_scan_interval_minutes": config.auto_scan_interval_minutes,
+                "scan_on_every_start": config.scan_on_every_start,
                 "items": [it.to_dict() for it in items],
             }
         )
@@ -314,13 +332,55 @@ def create_app(
                 config.auto_scan_interval_minutes = max(0, int(body["auto_scan_interval_minutes"]))
             except (TypeError, ValueError):
                 pass
+        if "scan_on_every_start" in body:
+            config.scan_on_every_start = bool(body["scan_on_every_start"])
         config.save()
         return jsonify(
             {
                 "ok": True,
                 "custom_keywords": config.custom_keywords,
                 "auto_scan_interval_minutes": config.auto_scan_interval_minutes,
+                "scan_on_every_start": config.scan_on_every_start,
             }
+        )
+
+    @app.post("/api/open-data-dir")
+    def api_open_data_dir() -> tuple[Response, int]:
+        ok = open_folder_in_os(config.data_dir)
+        return jsonify({"ok": ok, "path": str(config.data_dir)}), (200 if ok else 500)
+
+    @app.post("/api/launchers/desktop")
+    def api_create_desktop_launchers() -> tuple[Response, int]:
+        try:
+            created = create_desktop_launchers(config)
+            return jsonify({"ok": True, "files": [str(p) for p in created]}), 200
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    @app.get("/api/launchers/download/<kind>")
+    def api_download_launcher(kind: str) -> Response:
+        rt = detect_runtime_target()
+        frozen = rt["frozen"] == "1"
+        exe_hint = rt["executable"] if frozen else ""
+        repo_hint = "" if frozen else rt["repo_root"]
+        data_dir = str(config.data_dir)
+
+        generators = {
+            "windows-web": ("Inditas-Windows.bat", generate_windows_web_bat(exe_hint=exe_hint, repo_hint=repo_hint, data_dir=data_dir)),
+            "windows-excel": ("ADO-Agent-Gyors-Excel.bat", generate_windows_cmd_excel_bat(exe_hint=exe_hint, repo_hint=repo_hint, data_dir=data_dir)),
+            "windows-menu": ("ADO-Agent-CMD-Segito.bat", generate_windows_cmd_menu_bat(exe_hint=exe_hint, repo_hint=repo_hint, data_dir=data_dir)),
+            "mac-terminal": ("Inditas-Mac.command", generate_mac_terminal_command(app_hint=exe_hint, repo_hint=repo_hint, data_dir=data_dir)),
+            "mac-excel": ("ADO-Agent-Mac-Excel.command", generate_mac_excel_command(app_hint=exe_hint, repo_hint=repo_hint, data_dir=data_dir)),
+            "mac-menu": ("ADO-Agent-Mac-Terminal-Segito.command", generate_mac_menu_command(app_hint=exe_hint, repo_hint=repo_hint, data_dir=data_dir)),
+        }
+        entry = generators.get(kind)
+        if not entry:
+            return jsonify({"error": "Ismeretlen indító típus"}), 404
+        filename, payload = entry
+        return Response(
+            payload,
+            mimetype="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
     @app.get("/api/export/<fmt>")

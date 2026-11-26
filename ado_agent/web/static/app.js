@@ -18,8 +18,13 @@
     btnExportToggle: document.getElementById("btn-export-toggle"),
     exportMenu: document.getElementById("export-menu"),
     btnSources: document.getElementById("btn-sources"),
+    btnLaunchers: document.getElementById("btn-launchers"),
     btnSettings: document.getElementById("btn-settings"),
     btnShutdown: document.getElementById("btn-shutdown"),
+    btnOpenDataDirInline: document.getElementById("btn-open-data-dir-inline"),
+    btnOpenDataDirModal: document.getElementById("btn-open-data-dir-modal"),
+    btnCreateDesktopLaunchers: document.getElementById("btn-create-desktop-launchers"),
+    desktopLaunchersResult: document.getElementById("desktop-launchers-result"),
     progressBanner: document.getElementById("progress-banner"),
     progressText: document.getElementById("progress-text"),
     progressBar: document.getElementById("progress-bar"),
@@ -30,6 +35,7 @@
     kpiBills: document.getElementById("kpi-bills"),
     kpiBookmarked: document.getElementById("kpi-bookmarked"),
     kpiLastRun: document.getElementById("kpi-lastrun"),
+    persistenceSummary: document.getElementById("persistence-summary"),
     sourcePills: document.getElementById("source-status-pills"),
     filterSearch: document.getElementById("filter-search"),
     filterJurisdiction: document.getElementById("filter-jurisdiction"),
@@ -43,6 +49,7 @@
     resultsCount: document.getElementById("results-count"),
     itemsList: document.getElementById("items-list"),
     modalSources: document.getElementById("modal-sources"),
+    modalLaunchers: document.getElementById("modal-launchers"),
     sourcesManagerList: document.getElementById("sources-manager-list"),
     formAddSource: document.getElementById("form-add-source"),
     modalSettings: document.getElementById("modal-settings"),
@@ -51,6 +58,7 @@
     btnAddKw: document.getElementById("btn-add-kw"),
     customKwTags: document.getElementById("custom-kw-tags"),
     autoScanSelect: document.getElementById("auto-scan-select"),
+    chkScanEveryStart: document.getElementById("chk-scan-every-start"),
     btnSaveSettings: document.getElementById("btn-save-settings"),
     toast: document.getElementById("toast"),
   };
@@ -84,7 +92,7 @@
   function showToast(msg) {
     els.toast.textContent = msg;
     els.toast.classList.remove("hidden");
-    setTimeout(() => els.toast.classList.add("hidden"), 3200);
+    setTimeout(() => els.toast.classList.add("hidden"), 3400);
   }
 
   function buildFilterQuery() {
@@ -126,7 +134,7 @@
     const byJ = st.by_jurisdiction || {};
     els.kpiJurisdiction.textContent = `HU: ${byJ.HU || 0} • EU: ${byJ.EU || 0}`;
     els.kpiNew.textContent = (st.new_count || 0) + (st.updated_count || 0);
-    els.kpiUnread.textContent = `Olvasatlan összesen: ${st.unread_count || 0}`;
+    els.kpiUnread.textContent = `Olvasatlan: ${st.unread_count || 0} • Olvasott: ${st.read_count || 0}`;
     els.kpiBills.textContent = st.bills_count || 0;
     els.kpiBookmarked.textContent = st.bookmarked_count || 0;
     if (data.latest_run) {
@@ -134,6 +142,7 @@
     } else {
       els.kpiLastRun.textContent = "Még nem futott ellenőrzés — kattints az Ellenőrzés most gombra!";
     }
+    els.persistenceSummary.textContent = `Adatbázisba mentve: ${st.bookmarked_count || 0} kiemelt • ${st.read_count || 0} olvasott • ${st.noted_count || 0} jegyzet`;
   }
 
   function renderSourcePills(data) {
@@ -151,7 +160,7 @@
       const pill = document.createElement("button");
       pill.type = "button";
       pill.className = "source-pill";
-      pill.title = sr ? sr.message : src.description || src.url;
+      pill.title = sr ? `${sr.message} (kattints a szűréshez)` : src.description || src.url;
       const countText = counts[src.id] ? ` (${counts[src.id]})` : "";
       pill.innerHTML = `<span class="dot ${dotClass}"></span><span>${escapeHtml(src.name)}${countText}</span>`;
       pill.addEventListener("click", () => {
@@ -224,6 +233,7 @@
       const badges = [];
       if (it.is_new) badges.push(`<span class="badge badge-new">ÚJ</span>`);
       else if (it.is_updated) badges.push(`<span class="badge badge-upd">FRISSÜLT</span>`);
+      if (it.is_read) badges.push(`<span class="badge badge-read">✓ Olvasott</span>`);
       if (it.is_bill) badges.push(`<span class="badge badge-bill">Törvényjavaslat / Tervezet</span>`);
       badges.push(
         `<span class="badge ${it.jurisdiction === "EU" ? "badge-eu" : "badge-hu"}">${escapeHtml(it.jurisdiction)}</span>`
@@ -248,7 +258,7 @@
           <a href="${escapeHtml(it.url)}" target="_blank" rel="noopener noreferrer">${highlightedTitle}</a>
         </h3>
         <div class="item-cats">${catTags}</div>
-        ${it.summary ? `<p class="item-summary">${highlightedSummary}</p>` : ""}
+        ${it.summary ? `<p class="item-summary">${highlightedSummary}</p>'` : ""}
         <div class="item-footer">
           <div>
             <strong>Kulcsszavak:</strong> ${escapeHtml((it.matched_keywords || []).join(", "))}
@@ -263,13 +273,17 @@
           <input type="text" class="note-input" value="${escapeHtml(it.notes || "")}" placeholder="Saját megjegyzés ehhez a jogszabályhoz...">
           <button type="button" class="btn btn-secondary btn-sm btn-note-save">Mentés</button>
         </div>
-      `;
+      `.replace(`</p>'`, `</p>`);
 
       card.querySelector(".btn-bookmark").addEventListener("click", async () => {
-        await updateFlags(it.item_key, { is_bookmarked: !it.is_bookmarked });
+        const nextVal = !it.is_bookmarked;
+        await updateFlags(it.item_key, { is_bookmarked: nextVal });
+        showToast(nextVal ? "★ Kiemelés elmentve az adatbázisba." : "Kiemelés eltávolítva.");
       });
       card.querySelector(".btn-read").addEventListener("click", async () => {
-        await updateFlags(it.item_key, { is_read: !it.is_read });
+        const nextVal = !it.is_read;
+        await updateFlags(it.item_key, { is_read: nextVal });
+        showToast(nextVal ? "✓ Olvasott állapot elmentve." : "Visszaállítva olvasatlanra.");
       });
       const noteBox = card.querySelector(".note-box");
       card.querySelector(".btn-note-toggle").addEventListener("click", () => {
@@ -278,7 +292,7 @@
       card.querySelector(".btn-note-save").addEventListener("click", async () => {
         const val = card.querySelector(".note-input").value;
         await updateFlags(it.item_key, { notes: val });
-        showToast("Jegyzet elmentve.");
+        showToast("📝 Jegyzet elmentve az adatbázisba.");
       });
 
       els.itemsList.appendChild(card);
@@ -326,12 +340,12 @@
     }, 900);
   }
 
-  // Események
-  els.btnScan.addEventListener("click", async () => {
+  async function triggerScan(sourceIds = null) {
+    const body = sourceIds ? { source_ids: sourceIds } : {};
     const res = await fetch("/api/scan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     });
     if (res.ok) {
       const data = await res.json();
@@ -341,7 +355,22 @@
       const err = await res.json();
       showToast(err.message || "Már fut egy ellenőrzés.");
     }
-  });
+  }
+
+  async function openDataDir() {
+    const res = await fetch("/api/open-data-dir", { method: "POST" });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(`Adatmappa megnyitva: ${data.path}`);
+    } else {
+      showToast(`Adatmappa elérési útja: ${data.path}`);
+    }
+  }
+
+  // Események
+  els.btnScan.addEventListener("click", () => triggerScan());
+  els.btnOpenDataDirInline.addEventListener("click", openDataDir);
+  els.btnOpenDataDirModal.addEventListener("click", openDataDir);
 
   els.btnExportToggle.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -393,7 +422,7 @@
   });
   els.btnMarkAllRead.addEventListener("click", async () => {
     await fetch("/api/items/mark-all-read", { method: "POST" });
-    showToast("Minden találat olvasottként jelölve.");
+    showToast("Minden találat olvasottként elmentve.");
     await fetchState();
   });
 
@@ -404,6 +433,23 @@
     });
   });
 
+  els.btnLaunchers.addEventListener("click", () => {
+    els.modalLaunchers.classList.remove("hidden");
+  });
+
+  els.btnCreateDesktopLaunchers.addEventListener("click", async () => {
+    const res = await fetch("/api/launchers/desktop", { method: "POST" });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      els.desktopLaunchersResult.innerHTML =
+        `<strong>Létrehozva az Asztalon:</strong><br>` +
+        data.files.map((f) => `<code>${escapeHtml(f)}</code>`).join("<br>");
+      showToast("Asztali 1-kattintásos indítók létrehozva!");
+    } else {
+      showToast(data.error || "Nem sikerült létrehozni az asztali fájlokat.");
+    }
+  });
+
   els.btnSources.addEventListener("click", () => {
     renderSourcesModal();
     els.modalSources.classList.remove("hidden");
@@ -411,8 +457,15 @@
 
   function renderSourcesModal() {
     const sources = (state.data && state.data.sources) || [];
+    const runMap = {};
+    if (state.data && state.data.latest_run && Array.isArray(state.data.latest_run.source_results)) {
+      for (const sr of state.data.latest_run.source_results) {
+        runMap[sr.source_id] = sr;
+      }
+    }
     els.sourcesManagerList.innerHTML = "";
     for (const src of sources) {
+      const sr = runMap[src.id];
       const row = document.createElement("div");
       row.className = "src-mgr-row";
       row.innerHTML = `
@@ -421,14 +474,21 @@
           <span class="badge ${src.jurisdiction === "EU" ? "badge-eu" : "badge-hu"}">${escapeHtml(src.jurisdiction)}</span>
           <div class="small muted">${escapeHtml(src.url)}</div>
           ${src.description ? `<div class="small muted">${escapeHtml(src.description)}</div>` : ""}
+          ${sr ? `<div class="small" style="margin-top:4px;"><strong>Utolsó állapot:</strong> ${escapeHtml(sr.message)}</div>` : ""}
         </div>
         <div class="item-actions">
+          <a class="btn btn-ghost btn-sm" href="${escapeHtml(src.url)}" target="_blank" rel="noopener noreferrer">↗ Oldal</a>
+          <button type="button" class="btn btn-ghost btn-sm btn-scan-one">⟳ Frissítés</button>
           <label class="toggle-chip">
             <input type="checkbox" ${src.enabled ? "checked" : ""}> Aktív
           </label>
           ${!src.is_builtin ? `<button type="button" class="btn btn-ghost btn-sm btn-del-src">Törlés</button>` : ""}
         </div>
       `;
+      row.querySelector(".btn-scan-one").addEventListener("click", async () => {
+        els.modalSources.classList.add("hidden");
+        await triggerScan([src.id]);
+      });
       row.querySelector("input[type=checkbox]").addEventListener("change", async (e) => {
         await fetch(`/api/sources/${encodeURIComponent(src.id)}`, {
           method: "PATCH",
@@ -480,6 +540,7 @@
     const data = state.data || {};
     state.draftKeywords = [...(data.custom_keywords || [])];
     els.autoScanSelect.value = String(data.auto_scan_interval_minutes || 0);
+    els.chkScanEveryStart.checked = data.scan_on_every_start !== false;
     renderBuiltinCats(data.categories || []);
     renderDraftKeywords();
     els.modalSettings.classList.remove("hidden");
@@ -534,12 +595,13 @@
       body: JSON.stringify({
         custom_keywords: state.draftKeywords,
         auto_scan_interval_minutes: Number(els.autoScanSelect.value || 0),
+        scan_on_every_start: els.chkScanEveryStart.checked,
       }),
     });
     if (res.ok) {
       els.modalSettings.classList.add("hidden");
       await fetchState();
-      showToast("Beállítások mentve.");
+      showToast("Beállítások elmentve.");
     }
   });
 
@@ -552,7 +614,7 @@
     document.body.innerHTML = `
       <div style="max-width:560px;margin:80px auto;background:#fff;padding:30px;border-radius:14px;text-align:center;font-family:system-ui,sans-serif;border:1px solid #e2e8f0;">
         <h2>ADÓ Agent leállítva</h2>
-        <p style="color:#475569;">Ez a böngészőfül most bezárható.</p>
+        <p style="color:#475569;">Minden kiemelés, olvasott állapot és jegyzet elmentve. Ez a böngészőfül most bezárható.</p>
       </div>
     `;
   });

@@ -380,14 +380,16 @@ class Database:
     def get_stats(self) -> dict[str, Any]:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
-                "SELECT jurisdiction, source_id, is_bill, is_new, is_updated, is_read, is_bookmarked, categories_json FROM items"
+                "SELECT jurisdiction, source_id, is_bill, is_new, is_updated, is_read, is_bookmarked, notes, categories_json FROM items"
             ).fetchall()
 
         total = len(rows)
         new_count = sum(1 for r in rows if r["is_new"])
         updated_count = sum(1 for r in rows if r["is_updated"])
         unread_count = sum(1 for r in rows if not r["is_read"])
+        read_count = sum(1 for r in rows if r["is_read"])
         bookmarked_count = sum(1 for r in rows if r["is_bookmarked"])
+        noted_count = sum(1 for r in rows if (r["notes"] or "").strip())
         bills_count = sum(1 for r in rows if r["is_bill"])
 
         by_jurisdiction: dict[str, int] = {"HU": 0, "EU": 0}
@@ -406,7 +408,9 @@ class Database:
             "new_count": new_count,
             "updated_count": updated_count,
             "unread_count": unread_count,
+            "read_count": read_count,
             "bookmarked_count": bookmarked_count,
+            "noted_count": noted_count,
             "bills_count": bills_count,
             "by_jurisdiction": by_jurisdiction,
             "by_category": by_category,

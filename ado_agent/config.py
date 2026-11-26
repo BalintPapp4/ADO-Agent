@@ -190,6 +190,7 @@ class AppConfig:
     request_timeout_sec: int = 20
     max_workers: int = 5
     auto_scan_interval_minutes: int = 0  # 0 = kikapcsolva
+    scan_on_every_start: bool = True
     verify_ssl: bool = True
 
     @property
@@ -215,6 +216,7 @@ class AppConfig:
             "request_timeout_sec": self.request_timeout_sec,
             "max_workers": self.max_workers,
             "auto_scan_interval_minutes": self.auto_scan_interval_minutes,
+            "scan_on_every_start": self.scan_on_every_start,
             "verify_ssl": self.verify_ssl,
         }
 
@@ -248,6 +250,7 @@ class AppConfig:
                 cfg.request_timeout_sec = int(raw.get("request_timeout_sec", 20))
                 cfg.max_workers = int(raw.get("max_workers", 5))
                 cfg.auto_scan_interval_minutes = int(raw.get("auto_scan_interval_minutes", 0))
+                cfg.scan_on_every_start = bool(raw.get("scan_on_every_start", True))
                 cfg.verify_ssl = bool(raw.get("verify_ssl", True))
             except Exception:
                 # Sérült config esetén biztonságos visszaállás alapértelmezettre

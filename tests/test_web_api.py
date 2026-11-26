@@ -35,10 +35,25 @@ def test_web_ui_and_api_crud(tmp_path: Path):
     # Egyéni kulcsszó és ütemezés mentése
     r_set = client.put(
         "/api/settings",
-        json={"custom_keywords": ["e-nyugta", "kiskereskedelmi adó"], "auto_scan_interval_minutes": 60},
+        json={
+            "custom_keywords": ["e-nyugta", "kiskereskedelmi adó"],
+            "auto_scan_interval_minutes": 60,
+            "scan_on_every_start": False,
+        },
     )
     assert r_set.status_code == 200
     assert r_set.get_json()["auto_scan_interval_minutes"] == 60
+    assert r_set.get_json()["scan_on_every_start"] is False
+
+    # 1-kattintásos indítók letöltése és Asztali létrehozás
+    for kind in ("windows-web", "windows-excel", "windows-menu", "mac-terminal", "mac-excel", "mac-menu"):
+        r_dl = client.get(f"/api/launchers/download/{kind}")
+        assert r_dl.status_code == 200 and len(r_dl.data) > 100
+
+    with patch("ado_agent.launchers.resolve_desktop_dir", return_value=tmp_path / "desktop"):
+        r_desk = client.post("/api/launchers/desktop")
+        assert r_desk.status_code == 200
+        assert len(r_desk.get_json()["files"]) >= 1
 
     # Új egyéni forrás felvétele, módosítása és törlése
     r_add = client.post(
