@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from ado_agent.config import AppConfig
@@ -39,7 +41,8 @@ def test_mac_command_generators_pass_bash_syntax(tmp_path: Path):
 
         script_path = tmp_path / f"test_{idx}.command"
         script_path.write_bytes(raw)
-        subprocess.run(["bash", "-n", str(script_path)], check=True)
+        if sys.platform != "win32" and shutil.which("bash"):
+            subprocess.run(["bash", "-n", str(script_path)], check=True)
 
 
 def test_create_desktop_launchers(tmp_path: Path):
