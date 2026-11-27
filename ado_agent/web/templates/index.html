@@ -38,15 +38,21 @@
         <button id="btn-sources" class="btn btn-secondary" type="button">
           🌐 Források
         </button>
-        <button id="btn-launchers" class="btn btn-secondary" type="button">
-          ⌘ Indítók (CMD / Mac)
-        </button>
         <button id="btn-settings" class="btn btn-secondary" type="button">
           ⚙ Kulcsszavak &amp; Ütemezés
         </button>
-        <button id="btn-shutdown" class="btn btn-danger-outline" type="button" title="Alkalmazás biztonságos bezárása">
-          ⏻ Kilépés
-        </button>
+
+        {% if auth_enabled and current_user %}
+          {% if current_user.is_admin %}
+            <button id="btn-users" class="btn btn-secondary" type="button">👥 Csoport</button>
+          {% endif %}
+          <span class="user-pill" title="Bejelentkezve">👤 {{ current_user.display_name }}</span>
+          <button id="btn-logout" class="btn btn-danger-outline" type="button">↪ Kijelentkezés</button>
+        {% elif not web_mode %}
+          <button id="btn-shutdown" class="btn btn-danger-outline" type="button" title="Alkalmazás biztonságos bezárása">
+            ⏻ Kilépés
+          </button>
+        {% endif %}
       </div>
     </div>
 
@@ -71,7 +77,7 @@
       <div class="kpi-card kpi-highlight-green">
         <div class="kpi-label">Új / Frissült (olvasatlan)</div>
         <div class="kpi-value" id="kpi-new">0</div>
-        <div class="kpi-sub" id="kpi-unread">Olvasatlan: 0 • Olvasott: 0</div>
+        <div class="kpi-sub" id="kpi-unread">Olvasatlan összesen: 0</div>
       </div>
       <div class="kpi-card kpi-highlight-red">
         <div class="kpi-label">Törvényjavaslatok / Tervezetek</div>
@@ -89,10 +95,7 @@
     <section class="panel sources-strip">
       <div class="panel-header">
         <h2>Figyelt források állapota</h2>
-        <div class="header-meta-actions">
-          <span class="muted small">Mentve: <code id="db-path-label">{{ data_dir }}</code></span>
-          <button id="btn-open-data-dir-inline" class="btn btn-ghost btn-sm" type="button">📂 Mappa megnyitása</button>
-        </div>
+        <span class="muted small">Adatkönyvtár: <code>{{ data_dir }}</code></span>
       </div>
       <div id="source-status-pills" class="source-pills"></div>
     </section>
@@ -101,7 +104,7 @@
     <section class="panel filters-panel">
       <div class="filters-row">
         <div class="search-box">
-          <input id="filter-search" type="search" placeholder="Keresés címben, törvényszámban (pl. T/123, COM), kulcsszóban vagy jegyzetben...">
+          <input id="filter-search" type="search" placeholder="Keresés címben, törvényszámban (pl. T/123, COM), kulcsszóban vagy megjegyzésben...">
         </div>
 
         <select id="filter-jurisdiction" aria-label="Joghatóság">
@@ -133,6 +136,12 @@
         <label class="toggle-chip">
           <input type="checkbox" id="filter-only-bookmarked"> Csak kiemeltek (★)
         </label>
+        <label class="toggle-chip">
+          <input type="checkbox" id="filter-only-unread"> Csak olvasatlanok
+        </label>
+        <label class="toggle-chip">
+          <input type="checkbox" id="filter-only-read"> Csak olvasottak
+        </label>
         <div class="spacer"></div>
         <button id="btn-mark-all-read" class="btn btn-ghost btn-sm" type="button">
           ✓ Mind olvasottnak jelölése
@@ -144,7 +153,6 @@
     <section id="items-section">
       <div class="results-header">
         <h2 id="results-count">Találatok (0)</h2>
-        <span class="small muted" id="persistence-summary"></span>
       </div>
       <div id="items-list" class="items-list"></div>
     </section>
@@ -158,7 +166,7 @@
         <button class="modal-close" data-close="modal-sources" type="button">✕</button>
       </div>
       <div class="modal-body">
-        <p class="muted">Kapcsold be vagy ki a beépített magyar és EU-s forrásokat, indíts egy kattintással célzott frissítést egy forrásra, vagy adj hozzá saját oldalt / RSS-t.</p>
+        <p class="muted">Kapcsold be vagy ki a beépített magyar és EU-s forrásokat, vagy adj hozzá saját weboldalt / RSS hírfolyamot.</p>
         <div id="sources-manager-list" class="sources-manager-list"></div>
 
         <hr>
@@ -180,77 +188,6 @@
     </div>
   </div>
 
-  <!-- 1-kattintásos indítók (Windows CMD & macOS Terminal) modal -->
-  <div id="modal-launchers" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-card">
-      <div class="modal-header">
-        <h3>1-kattintásos Indítók — Windows CMD &amp; macOS Terminal</h3>
-        <button class="modal-close" data-close="modal-launchers" type="button">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="launcher-highlight-box">
-          <div>
-            <strong>Asztali 1-kattintásos parancsikonok létrehozása</strong>
-            <p class="small muted">Egy gombnyomással létrehozza az Asztalodon a közvetlen indítót (Windows: <code>.bat</code> CMD parancsok, macOS: duplakattintásos Terminal <code>.command</code> fájlok), hogy egy kattintással elinduljon az app vagy az Excel export.</p>
-          </div>
-          <div class="item-actions">
-            <button id="btn-create-desktop-launchers" class="btn btn-primary" type="button">⚡ Létrehozás az Asztalon</button>
-            <button id="btn-open-data-dir-modal" class="btn btn-ghost" type="button">📂 Adatmappa</button>
-          </div>
-        </div>
-        <div id="desktop-launchers-result" class="small muted" style="margin-top:8px;"></div>
-
-        <hr>
-        <h4>Letölthető Windows CMD indítófájlok (.bat)</h4>
-        <div class="launcher-download-grid">
-          <a class="launcher-dl-card" href="/api/launchers/download/windows-web">
-            <strong>▶ Inditas-Windows.bat</strong>
-            <span class="small muted">1 kattintással elindítja az ADÓ Agentet és megnyitja a böngészőt.</span>
-          </a>
-          <a class="launcher-dl-card" href="/api/launchers/download/windows-excel">
-            <strong>📊 ADO-Agent-Gyors-Excel.bat</strong>
-            <span class="small muted">CMD-ben lefut, elmenti az Excel riportot az Asztalra és megnyitja.</span>
-          </a>
-          <a class="launcher-dl-card" href="/api/launchers/download/windows-menu">
-            <strong>⌘ ADO-Agent-CMD-Segito.bat</strong>
-            <span class="small muted">Interaktív Windows CMD segédmenü minden feladathoz.</span>
-          </a>
-        </div>
-
-        <hr>
-        <h4>Letölthető macOS Terminal indítófájlok (.command)</h4>
-        <p class="small muted">Macen a <code>.command</code> fájl duplakattintásra automatikusan megnyitja a Terminált, feloldja az esetleges Gatekeeper zárolást, és futtatja a programot. <em>(Ha böngészőből töltöd le, első alkalommal a Terminalban add ki a <code>chmod +x ~/Downloads/*.command</code> parancsot, vagy használd a fenti Asztali létrehozás gombot.)</em></p>
-        <div class="launcher-download-grid">
-          <a class="launcher-dl-card" href="/api/launchers/download/mac-terminal">
-            <strong>▶ Inditas-Mac.command</strong>
-            <span class="small muted">1 kattintásos macOS Terminal indító (app + webes felület).</span>
-          </a>
-          <a class="launcher-dl-card" href="/api/launchers/download/mac-excel">
-            <strong>📊 ADO-Agent-Mac-Excel.command</strong>
-            <span class="small muted">Terminálos ellenőrzés + Excel riport mentése az Asztalra.</span>
-          </a>
-          <a class="launcher-dl-card" href="/api/launchers/download/mac-menu">
-            <strong>⌘ ADO-Agent-Mac-Terminal-Segito.command</strong>
-            <span class="small muted">Interaktív macOS Terminal segédmenü.</span>
-          </a>
-        </div>
-
-        <hr>
-        <h4>Közvetlen CMD / Terminal parancsok másoláshoz</h4>
-        <div class="cmd-snippets">
-          <div class="cmd-box">
-            <div class="small"><strong>Windows CMD (ellenőrzés + Excel az Asztalra):</strong></div>
-            <code id="cmd-win-snippet">ADO-Agent-windows-x64.exe --scan --export "%USERPROFILE%\Desktop\ADO-Agent-Jelentes.xlsx"</code>
-          </div>
-          <div class="cmd-box">
-            <div class="small"><strong>macOS Terminal (Gatekeeper feloldás + indítás):</strong></div>
-            <code id="cmd-mac-snippet">xattr -cr ADO-Agent.app ado-agent-cli &amp;&amp; ./ado-agent-cli</code>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- Kulcsszavak & Ütemezés modal -->
   <div id="modal-settings" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
@@ -266,34 +203,58 @@
         <h4>Egyéni kulcsszavak</h4>
         <p class="muted">Ha saját szakterületi adót vagy kifejezést is figyelni szeretnél (pl. <em>gyógyszerkülönadó</em>, <em>kiskereskedelmi adó</em>, <em>e-nyugta</em>), írd be alább:</p>
         <div class="kw-add-row">
-          <input id="new-kw-input" type="text" placeholder="Új kulcsszó vagy kifejezés...">
+          <input id="new-kw-input" type="text" placeholder="Új kulcsszó vagy kifejezés (több is megadható vesszővel)...">
           <button id="btn-add-kw" class="btn btn-secondary" type="button">+ Hozzáadás</button>
         </div>
         <div id="custom-kw-tags" class="kw-tags"></div>
+        <label class="toggle-chip" style="margin-top: 10px;">
+          <input type="checkbox" id="chk-rescan-after-kw" checked> Kulcsszóváltozáskor a források azonnali frissítése (új cikkekhez is)
+        </label>
 
         <hr>
-        <h4>Indítás és Automatikus háttér-ellenőrzés</h4>
-        <div class="schedule-col">
-          <label class="toggle-chip">
-            <input type="checkbox" id="chk-scan-every-start">
-            <strong>1-kattintásos frissítés:</strong> minden programindításkor automatikusan ellenőrizze a forrásokat
-          </label>
-          <div class="schedule-row">
-            <label for="auto-scan-select">Ismétlődés (amíg az ADÓ Agent fut):</label>
-            <select id="auto-scan-select">
-              <option value="0">Kikapcsolva (csak induláskor / kézi ellenőrzéskor)</option>
-              <option value="30">30 percenként</option>
-              <option value="60">Óránként</option>
-              <option value="240">4 óránként</option>
-              <option value="720">12 óránként</option>
-              <option value="1440">Naponta (24 óránként)</option>
-            </select>
-          </div>
+        <h4>Automatikus háttér-ellenőrzés</h4>
+        <div class="schedule-row">
+          <label for="auto-scan-select">Időköz (amíg az ADÓ Agent fut):</label>
+          <select id="auto-scan-select">
+            <option value="0">Kikapcsolva (csak kézi ellenőrzés)</option>
+            <option value="30">30 percenként</option>
+            <option value="60">Óránként</option>
+            <option value="240">4 óránként</option>
+            <option value="360">6 óránként</option>
+            <option value="720">12 óránként</option>
+            <option value="1440">Naponta (24 óránként)</option>
+          </select>
         </div>
 
         <div class="modal-footer">
           <button id="btn-save-settings" class="btn btn-primary" type="button">Beállítások mentése</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Csoporttagok kezelése modal (Admin) -->
+  <div id="modal-users" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Csoporttagok kezelése</h3>
+        <button class="modal-close" data-close="modal-users" type="button">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted">Minden csoporttag külön olvasott/olvasatlan és kiemelt listát kap, a megjegyzések pedig névvel jelennek meg.</p>
+        <div id="users-manager-list" class="sources-manager-list"></div>
+
+        <hr>
+        <h4>+ Új csoporttag felvétele</h4>
+        <form id="form-add-user" class="add-user-form">
+          <input id="new-user-username" type="text" placeholder="Felhasználónév (pl. anna)" required>
+          <input id="new-user-display" type="text" placeholder="Megjelenített név (pl. Kiss Anna)">
+          <input id="new-user-password" type="password" placeholder="Jelszó (min. 4 kar.)" required>
+          <label class="toggle-chip">
+            <input id="new-user-admin" type="checkbox"> Admin
+          </label>
+          <button class="btn btn-primary" type="submit">Létrehozás</button>
+        </form>
       </div>
     </div>
   </div>

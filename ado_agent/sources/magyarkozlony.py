@@ -1,4 +1,4 @@
-"""Magyar Közlöny (magyarkozlony.hu — zöld hivatalos lap) forrásadapter."""
+"""Magyar Közlöny (magyarkozlony.hu — hivatalos lap) forrásadapter."""
 
 from __future__ import annotations
 

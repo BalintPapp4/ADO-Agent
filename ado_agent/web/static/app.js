@@ -5,6 +5,8 @@
     source_id: "",
     search: "",
     only_new: false,
+    only_unread: false,
+    only_read: false,
     only_bills: false,
     only_bookmarked: false,
     sort_by: "relevance",
@@ -18,13 +20,10 @@
     btnExportToggle: document.getElementById("btn-export-toggle"),
     exportMenu: document.getElementById("export-menu"),
     btnSources: document.getElementById("btn-sources"),
-    btnLaunchers: document.getElementById("btn-launchers"),
     btnSettings: document.getElementById("btn-settings"),
     btnShutdown: document.getElementById("btn-shutdown"),
-    btnOpenDataDirInline: document.getElementById("btn-open-data-dir-inline"),
-    btnOpenDataDirModal: document.getElementById("btn-open-data-dir-modal"),
-    btnCreateDesktopLaunchers: document.getElementById("btn-create-desktop-launchers"),
-    desktopLaunchersResult: document.getElementById("desktop-launchers-result"),
+    btnLogout: document.getElementById("btn-logout"),
+    btnUsers: document.getElementById("btn-users"),
     progressBanner: document.getElementById("progress-banner"),
     progressText: document.getElementById("progress-text"),
     progressBar: document.getElementById("progress-bar"),
@@ -35,7 +34,6 @@
     kpiBills: document.getElementById("kpi-bills"),
     kpiBookmarked: document.getElementById("kpi-bookmarked"),
     kpiLastRun: document.getElementById("kpi-lastrun"),
-    persistenceSummary: document.getElementById("persistence-summary"),
     sourcePills: document.getElementById("source-status-pills"),
     filterSearch: document.getElementById("filter-search"),
     filterJurisdiction: document.getElementById("filter-jurisdiction"),
@@ -43,13 +41,14 @@
     filterSort: document.getElementById("filter-sort"),
     categoryChips: document.getElementById("category-chips"),
     filterOnlyNew: document.getElementById("filter-only-new"),
+    filterOnlyUnread: document.getElementById("filter-only-unread"),
+    filterOnlyRead: document.getElementById("filter-only-read"),
     filterOnlyBills: document.getElementById("filter-only-bills"),
     filterOnlyBookmarked: document.getElementById("filter-only-bookmarked"),
     btnMarkAllRead: document.getElementById("btn-mark-all-read"),
     resultsCount: document.getElementById("results-count"),
     itemsList: document.getElementById("items-list"),
     modalSources: document.getElementById("modal-sources"),
-    modalLaunchers: document.getElementById("modal-launchers"),
     sourcesManagerList: document.getElementById("sources-manager-list"),
     formAddSource: document.getElementById("form-add-source"),
     modalSettings: document.getElementById("modal-settings"),
@@ -57,9 +56,12 @@
     newKwInput: document.getElementById("new-kw-input"),
     btnAddKw: document.getElementById("btn-add-kw"),
     customKwTags: document.getElementById("custom-kw-tags"),
+    chkRescanAfterKw: document.getElementById("chk-rescan-after-kw"),
     autoScanSelect: document.getElementById("auto-scan-select"),
-    chkScanEveryStart: document.getElementById("chk-scan-every-start"),
     btnSaveSettings: document.getElementById("btn-save-settings"),
+    modalUsers: document.getElementById("modal-users"),
+    usersManagerList: document.getElementById("users-manager-list"),
+    formAddUser: document.getElementById("form-add-user"),
     toast: document.getElementById("toast"),
   };
 
@@ -72,27 +74,61 @@
       .replaceAll("'", "&#039;");
   }
 
+  function buildAccentTolerantPattern(kw) {
+    const map = {
+      a: "[aá]",
+      á: "[aá]",
+      e: "[eé]",
+      é: "[eé]",
+      i: "[ií]",
+      í: "[ií]",
+      o: "[oóöő]",
+      ó: "[oóöő]",
+      ö: "[oóöő]",
+      ő: "[oóöő]",
+      u: "[uúüű]",
+      ú: "[uúüű]",
+      ü: "[uúüű]",
+      ű: "[uúüű]",
+    };
+    return [...kw]
+      .map((ch) => {
+        const low = ch.toLowerCase();
+        if (kw.length >= 4 && map[low]) return map[low];
+        return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      })
+      .join("");
+  }
+
   function highlightText(rawText, keywords) {
-    let safe = escapeHtml(rawText || "");
-    if (!keywords || !keywords.length) return safe;
+    const text = String(rawText || "");
+    if (!text || !keywords || !keywords.length) return escapeHtml(text);
     const sorted = [...keywords]
       .filter((k) => k && k.length >= 2)
       .sort((a, b) => b.length - a.length)
-      .slice(0, 10);
-    for (const kw of sorted) {
-      const escapedKw = escapeHtml(kw).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      try {
-        const re = new RegExp(`(${escapedKw})`, "gi");
-        safe = safe.replace(re, "<mark>$1</mark>");
-      } catch (_) {}
+      .slice(0, 12);
+    if (!sorted.length) return escapeHtml(text);
+    try {
+      const combined = new RegExp(`(${sorted.map(buildAccentTolerantPattern).join("|")})`, "gi");
+      let out = "";
+      let lastIdx = 0;
+      for (const m of text.matchAll(combined)) {
+        const idx = m.index ?? 0;
+        if (idx > lastIdx) out += escapeHtml(text.slice(lastIdx, idx));
+        out += `<mark>${escapeHtml(m[0])}</mark>`;
+        lastIdx = idx + m[0].length;
+      }
+      if (lastIdx < text.length) out += escapeHtml(text.slice(lastIdx));
+      return out || escapeHtml(text);
+    } catch (_) {
+      return escapeHtml(text);
     }
-    return safe;
   }
 
   function showToast(msg) {
     els.toast.textContent = msg;
     els.toast.classList.remove("hidden");
-    setTimeout(() => els.toast.classList.add("hidden"), 3400);
+    setTimeout(() => els.toast.classList.add("hidden"), 3200);
   }
 
   function buildFilterQuery() {
@@ -102,6 +138,8 @@
     if (state.source_id) params.set("source_id", state.source_id);
     if (state.search) params.set("search", state.search);
     if (state.only_new) params.set("only_new", "1");
+    if (state.only_unread) params.set("only_unread", "1");
+    if (state.only_read) params.set("only_read", "1");
     if (state.only_bills) params.set("only_bills", "1");
     if (state.only_bookmarked) params.set("only_bookmarked", "1");
     if (state.sort_by) params.set("sort_by", state.sort_by);
@@ -111,6 +149,10 @@
   async function fetchState() {
     const qs = buildFilterQuery();
     const res = await fetch(`/api/state?${qs}`);
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
     const data = await res.json();
     state.data = data;
     renderAll(data);
@@ -134,7 +176,7 @@
     const byJ = st.by_jurisdiction || {};
     els.kpiJurisdiction.textContent = `HU: ${byJ.HU || 0} • EU: ${byJ.EU || 0}`;
     els.kpiNew.textContent = (st.new_count || 0) + (st.updated_count || 0);
-    els.kpiUnread.textContent = `Olvasatlan: ${st.unread_count || 0} • Olvasott: ${st.read_count || 0}`;
+    els.kpiUnread.textContent = `Olvasatlan összesen: ${st.unread_count || 0}`;
     els.kpiBills.textContent = st.bills_count || 0;
     els.kpiBookmarked.textContent = st.bookmarked_count || 0;
     if (data.latest_run) {
@@ -142,7 +184,6 @@
     } else {
       els.kpiLastRun.textContent = "Még nem futott ellenőrzés — kattints az Ellenőrzés most gombra!";
     }
-    els.persistenceSummary.textContent = `Adatbázisba mentve: ${st.bookmarked_count || 0} kiemelt • ${st.read_count || 0} olvasott • ${st.noted_count || 0} jegyzet`;
   }
 
   function renderSourcePills(data) {
@@ -160,7 +201,7 @@
       const pill = document.createElement("button");
       pill.type = "button";
       pill.className = "source-pill";
-      pill.title = sr ? `${sr.message} (kattints a szűréshez)` : src.description || src.url;
+      pill.title = sr ? sr.message : src.description || src.url;
       const countText = counts[src.id] ? ` (${counts[src.id]})` : "";
       pill.innerHTML = `<span class="dot ${dotClass}"></span><span>${escapeHtml(src.name)}${countText}</span>`;
       pill.addEventListener("click", () => {
@@ -213,10 +254,21 @@
     const items = data.items || [];
     els.resultsCount.textContent = `Találatok (${items.length})`;
     if (!items.length) {
+      let emptyDetail =
+        "Kattints a fenti <strong>„Ellenőrzés most”</strong> gombra a magyar és EU-s oldalak lekérdezéséhez, vagy lazíts a szűrőkön.";
+      if (state.category === "egyeni") {
+        const kws = data.custom_keywords || [];
+        if (!kws.length) {
+          emptyDetail =
+            "Még nincs megadva egyéni kulcsszó. Nyisd meg felül a <strong>„⚙ Kulcsszavak &amp; Ütemezés”</strong> ablakot a saját kulcsszavaid felvételéhez.";
+        } else {
+          emptyDetail = `Aktív egyéni kulcsszavak: <strong>${escapeHtml(kws.join(", "))}</strong>. A jelenlegi szűrők mellett még nincs egyező cikk — kattints az <strong>„Ellenőrzés most”</strong> gombra vagy lazíts a szűrőkön.`;
+        }
+      }
       els.itemsList.innerHTML = `
         <div class="empty-state">
           <h3>Nincs megjeleníthető adózási találat</h3>
-          <p>Kattints a fenti <strong>„Ellenőrzés most”</strong> gombra a magyar és EU-s oldalak lekérdezéséhez, vagy lazíts a szűrőkön.</p>
+          <p>${emptyDetail}</p>
         </div>
       `;
       return;
@@ -233,7 +285,6 @@
       const badges = [];
       if (it.is_new) badges.push(`<span class="badge badge-new">ÚJ</span>`);
       else if (it.is_updated) badges.push(`<span class="badge badge-upd">FRISSÜLT</span>`);
-      if (it.is_read) badges.push(`<span class="badge badge-read">✓ Olvasott</span>`);
       if (it.is_bill) badges.push(`<span class="badge badge-bill">Törvényjavaslat / Tervezet</span>`);
       badges.push(
         `<span class="badge ${it.jurisdiction === "EU" ? "badge-eu" : "badge-hu"}">${escapeHtml(it.jurisdiction)}</span>`
@@ -248,6 +299,30 @@
       const highlightedSummary = highlightText(it.summary || "", it.matched_keywords || []);
       const highlightedTitle = highlightText(it.title, it.matched_keywords || []);
 
+      const comments = it.comments || [];
+      const commentsHtml = comments
+        .map(
+          (c) => `
+          <div class="comment-item">
+            <div class="comment-header">
+              <strong>${escapeHtml(c.author_name)}</strong>
+              <span class="muted small">${escapeHtml(c.created_at)}</span>
+              ${
+                c.can_delete
+                  ? `<button type="button" class="comment-del-btn" data-cid="${c.id}" title="Törlés">✕</button>`
+                  : ""
+              }
+            </div>
+            <div class="comment-body">${escapeHtml(c.body)}</div>
+          </div>
+        `
+        )
+        .join("");
+
+      const legacyNoteHtml = it.notes
+        ? `<div class="comment-item"><div class="comment-header"><strong>Korábbi jegyzet</strong></div><div class="comment-body">${escapeHtml(it.notes)}</div></div>`
+        : "";
+
       card.innerHTML = `
         <div class="item-meta">
           ${badges.join("")}
@@ -258,41 +333,71 @@
           <a href="${escapeHtml(it.url)}" target="_blank" rel="noopener noreferrer">${highlightedTitle}</a>
         </h3>
         <div class="item-cats">${catTags}</div>
-        ${it.summary ? `<p class="item-summary">${highlightedSummary}</p>'` : ""}
+        ${it.summary ? `<p class="item-summary">${highlightedSummary}</p>` : ""}
         <div class="item-footer">
           <div>
             <strong>Kulcsszavak:</strong> ${escapeHtml((it.matched_keywords || []).join(", "))}
           </div>
           <div class="item-actions">
             <button type="button" class="btn btn-ghost btn-sm btn-bookmark">${it.is_bookmarked ? "★ Kiemelt" : "☆ Kiemelés"}</button>
-            <button type="button" class="btn btn-ghost btn-sm btn-read">${it.is_read ? "Olvasatlannak jelöl" : "✓ Olvasott"}</button>
-            <button type="button" class="btn btn-ghost btn-sm btn-note-toggle">📝 Jegyzet</button>
+            <button type="button" class="btn btn-ghost btn-sm btn-read">${it.is_read ? "↩ Olvasatlanná" : "✓ Olvasott"}</button>
+            <button type="button" class="btn btn-ghost btn-sm btn-comments-toggle">💬 Megjegyzések (${comments.length})</button>
           </div>
         </div>
-        <div class="note-box ${it.notes ? "" : "hidden"}">
-          <input type="text" class="note-input" value="${escapeHtml(it.notes || "")}" placeholder="Saját megjegyzés ehhez a jogszabályhoz...">
-          <button type="button" class="btn btn-secondary btn-sm btn-note-save">Mentés</button>
+        <div class="comments-section ${comments.length || it.notes ? "" : "hidden"}">
+          <div class="comments-list">${legacyNoteHtml}${commentsHtml}</div>
+          <form class="comment-form">
+            <input type="text" class="comment-input" placeholder="Megjegyzés hozzáadása a csoporthoz..." required>
+            <button type="submit" class="btn btn-secondary btn-sm">Küldés</button>
+          </form>
         </div>
-      `.replace(`</p>'`, `</p>`);
+      `;
 
       card.querySelector(".btn-bookmark").addEventListener("click", async () => {
-        const nextVal = !it.is_bookmarked;
-        await updateFlags(it.item_key, { is_bookmarked: nextVal });
-        showToast(nextVal ? "★ Kiemelés elmentve az adatbázisba." : "Kiemelés eltávolítva.");
+        await updateFlags(it.item_key, { is_bookmarked: !it.is_bookmarked });
       });
       card.querySelector(".btn-read").addEventListener("click", async () => {
-        const nextVal = !it.is_read;
-        await updateFlags(it.item_key, { is_read: nextVal });
-        showToast(nextVal ? "✓ Olvasott állapot elmentve." : "Visszaállítva olvasatlanra.");
+        await updateFlags(it.item_key, { is_read: !it.is_read });
       });
-      const noteBox = card.querySelector(".note-box");
-      card.querySelector(".btn-note-toggle").addEventListener("click", () => {
-        noteBox.classList.toggle("hidden");
+      const commentsSection = card.querySelector(".comments-section");
+      card.querySelector(".btn-comments-toggle").addEventListener("click", () => {
+        commentsSection.classList.toggle("hidden");
       });
-      card.querySelector(".btn-note-save").addEventListener("click", async () => {
-        const val = card.querySelector(".note-input").value;
-        await updateFlags(it.item_key, { notes: val });
-        showToast("📝 Jegyzet elmentve az adatbázisba.");
+      card.querySelector(".comment-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const input = card.querySelector(".comment-input");
+        const bodyText = input.value.trim();
+        if (!bodyText) return;
+        const res = await fetch(`/api/items/${encodeURIComponent(it.item_key)}/comments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body: bodyText }),
+        });
+        if (res.status === 401) {
+          window.location.href = "/login";
+          return;
+        }
+        if (res.ok) {
+          input.value = "";
+          showToast("Megjegyzés hozzáadva.");
+          await fetchState();
+        } else {
+          const err = await res.json();
+          showToast(err.error || "Hiba a mentésnél.");
+        }
+      });
+      card.querySelectorAll(".comment-del-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const cid = btn.getAttribute("data-cid");
+          const res = await fetch(`/api/comments/${cid}`, { method: "DELETE" });
+          if (res.ok) {
+            showToast("Megjegyzés törölve.");
+            await fetchState();
+          } else {
+            const err = await res.json();
+            showToast(err.error || "Nem sikerült törölni.");
+          }
+        });
       });
 
       els.itemsList.appendChild(card);
@@ -300,11 +405,15 @@
   }
 
   async function updateFlags(itemKey, payload) {
-    await fetch(`/api/items/${encodeURIComponent(itemKey)}/flags`, {
+    const res = await fetch(`/api/items/${encodeURIComponent(itemKey)}/flags`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
     await fetchState();
   }
 
@@ -329,6 +438,12 @@
     if (state.pollTimer) return;
     state.pollTimer = setInterval(async () => {
       const res = await fetch("/api/scan/status");
+      if (res.status === 401) {
+        clearInterval(state.pollTimer);
+        state.pollTimer = null;
+        window.location.href = "/login";
+        return;
+      }
       const data = await res.json();
       renderScanBanner(data.scan_status);
       if (!data.scan_status.running) {
@@ -340,13 +455,17 @@
     }, 900);
   }
 
-  async function triggerScan(sourceIds = null) {
-    const body = sourceIds ? { source_ids: sourceIds } : {};
+  // Események
+  els.btnScan.addEventListener("click", async () => {
     const res = await fetch("/api/scan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({}),
     });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
     if (res.ok) {
       const data = await res.json();
       renderScanBanner(data.scan_status);
@@ -355,22 +474,7 @@
       const err = await res.json();
       showToast(err.message || "Már fut egy ellenőrzés.");
     }
-  }
-
-  async function openDataDir() {
-    const res = await fetch("/api/open-data-dir", { method: "POST" });
-    const data = await res.json();
-    if (data.ok) {
-      showToast(`Adatmappa megnyitva: ${data.path}`);
-    } else {
-      showToast(`Adatmappa elérési útja: ${data.path}`);
-    }
-  }
-
-  // Események
-  els.btnScan.addEventListener("click", () => triggerScan());
-  els.btnOpenDataDirInline.addEventListener("click", openDataDir);
-  els.btnOpenDataDirModal.addEventListener("click", openDataDir);
+  });
 
   els.btnExportToggle.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -412,6 +516,26 @@
     state.only_new = els.filterOnlyNew.checked;
     fetchState();
   });
+  if (els.filterOnlyUnread) {
+    els.filterOnlyUnread.addEventListener("change", () => {
+      state.only_unread = els.filterOnlyUnread.checked;
+      if (state.only_unread && els.filterOnlyRead) {
+        els.filterOnlyRead.checked = false;
+        state.only_read = false;
+      }
+      fetchState();
+    });
+  }
+  if (els.filterOnlyRead) {
+    els.filterOnlyRead.addEventListener("change", () => {
+      state.only_read = els.filterOnlyRead.checked;
+      if (state.only_read && els.filterOnlyUnread) {
+        els.filterOnlyUnread.checked = false;
+        state.only_unread = false;
+      }
+      fetchState();
+    });
+  }
   els.filterOnlyBills.addEventListener("change", () => {
     state.only_bills = els.filterOnlyBills.checked;
     fetchState();
@@ -421,8 +545,12 @@
     fetchState();
   });
   els.btnMarkAllRead.addEventListener("click", async () => {
-    await fetch("/api/items/mark-all-read", { method: "POST" });
-    showToast("Minden találat olvasottként elmentve.");
+    const res = await fetch("/api/items/mark-all-read", { method: "POST" });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    showToast("Minden találat olvasottként jelölve.");
     await fetchState();
   });
 
@@ -433,23 +561,6 @@
     });
   });
 
-  els.btnLaunchers.addEventListener("click", () => {
-    els.modalLaunchers.classList.remove("hidden");
-  });
-
-  els.btnCreateDesktopLaunchers.addEventListener("click", async () => {
-    const res = await fetch("/api/launchers/desktop", { method: "POST" });
-    const data = await res.json();
-    if (res.ok && data.ok) {
-      els.desktopLaunchersResult.innerHTML =
-        `<strong>Létrehozva az Asztalon:</strong><br>` +
-        data.files.map((f) => `<code>${escapeHtml(f)}</code>`).join("<br>");
-      showToast("Asztali 1-kattintásos indítók létrehozva!");
-    } else {
-      showToast(data.error || "Nem sikerült létrehozni az asztali fájlokat.");
-    }
-  });
-
   els.btnSources.addEventListener("click", () => {
     renderSourcesModal();
     els.modalSources.classList.remove("hidden");
@@ -457,15 +568,8 @@
 
   function renderSourcesModal() {
     const sources = (state.data && state.data.sources) || [];
-    const runMap = {};
-    if (state.data && state.data.latest_run && Array.isArray(state.data.latest_run.source_results)) {
-      for (const sr of state.data.latest_run.source_results) {
-        runMap[sr.source_id] = sr;
-      }
-    }
     els.sourcesManagerList.innerHTML = "";
     for (const src of sources) {
-      const sr = runMap[src.id];
       const row = document.createElement("div");
       row.className = "src-mgr-row";
       row.innerHTML = `
@@ -474,21 +578,14 @@
           <span class="badge ${src.jurisdiction === "EU" ? "badge-eu" : "badge-hu"}">${escapeHtml(src.jurisdiction)}</span>
           <div class="small muted">${escapeHtml(src.url)}</div>
           ${src.description ? `<div class="small muted">${escapeHtml(src.description)}</div>` : ""}
-          ${sr ? `<div class="small" style="margin-top:4px;"><strong>Utolsó állapot:</strong> ${escapeHtml(sr.message)}</div>` : ""}
         </div>
         <div class="item-actions">
-          <a class="btn btn-ghost btn-sm" href="${escapeHtml(src.url)}" target="_blank" rel="noopener noreferrer">↗ Oldal</a>
-          <button type="button" class="btn btn-ghost btn-sm btn-scan-one">⟳ Frissítés</button>
           <label class="toggle-chip">
             <input type="checkbox" ${src.enabled ? "checked" : ""}> Aktív
           </label>
           ${!src.is_builtin ? `<button type="button" class="btn btn-ghost btn-sm btn-del-src">Törlés</button>` : ""}
         </div>
       `;
-      row.querySelector(".btn-scan-one").addEventListener("click", async () => {
-        els.modalSources.classList.add("hidden");
-        await triggerScan([src.id]);
-      });
       row.querySelector("input[type=checkbox]").addEventListener("change", async (e) => {
         await fetch(`/api/sources/${encodeURIComponent(src.id)}`, {
           method: "PATCH",
@@ -540,7 +637,6 @@
     const data = state.data || {};
     state.draftKeywords = [...(data.custom_keywords || [])];
     els.autoScanSelect.value = String(data.auto_scan_interval_minutes || 0);
-    els.chkScanEveryStart.checked = data.scan_on_every_start !== false;
     renderBuiltinCats(data.categories || []);
     renderDraftKeywords();
     els.modalSettings.classList.remove("hidden");
@@ -578,46 +674,162 @@
     });
   }
 
-  els.btnAddKw.addEventListener("click", () => {
-    const kw = els.newKwInput.value.trim();
-    if (!kw) return;
-    if (!state.draftKeywords.some((k) => k.toLowerCase() === kw.toLowerCase())) {
-      state.draftKeywords.push(kw);
-      renderDraftKeywords();
+  function commitPendingKeywordInput() {
+    const raw = (els.newKwInput.value || "").trim();
+    if (!raw) return false;
+    let added = false;
+    for (const part of raw.split(/[,;]+/)) {
+      const kw = part.trim().replace(/\s+/g, " ");
+      if (!kw) continue;
+      if (!state.draftKeywords.some((k) => k.toLowerCase() === kw.toLowerCase())) {
+        state.draftKeywords.push(kw);
+        added = true;
+      }
     }
     els.newKwInput.value = "";
+    if (added) renderDraftKeywords();
+    return added;
+  }
+
+  els.btnAddKw.addEventListener("click", () => {
+    commitPendingKeywordInput();
+    els.newKwInput.focus();
+  });
+
+  els.newKwInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitPendingKeywordInput();
+    }
   });
 
   els.btnSaveSettings.addEventListener("click", async () => {
+    commitPendingKeywordInput();
+    const prevKeywords = ((state.data && state.data.custom_keywords) || [])
+      .map((k) => k.toLowerCase())
+      .join("\u0001");
+    const nextKeywords = state.draftKeywords.map((k) => k.toLowerCase()).join("\u0001");
+    const keywordsChanged = prevKeywords !== nextKeywords;
+    const shouldRescan = Boolean(
+      keywordsChanged && els.chkRescanAfterKw && els.chkRescanAfterKw.checked
+    );
+
     const res = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         custom_keywords: state.draftKeywords,
         auto_scan_interval_minutes: Number(els.autoScanSelect.value || 0),
-        scan_on_every_start: els.chkScanEveryStart.checked,
+        rescan: shouldRescan,
       }),
     });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
     if (res.ok) {
+      const resData = await res.json();
       els.modalSettings.classList.add("hidden");
       await fetchState();
-      showToast("Beállítások elmentve.");
+      if (resData.scan_started) {
+        startScanPolling();
+      }
+      const reclass = resData.reclassified || {};
+      if (state.draftKeywords.length) {
+        const matched = reclass.custom_matched || 0;
+        const suffix = resData.scan_started ? " Friss ellenőrzés is elindult a háttérben." : "";
+        showToast(`Beállítások mentve — ${matched} tárolt találat egyezik.${suffix}`);
+      } else {
+        showToast("Beállítások mentve.");
+      }
     }
   });
 
-  // Kilépés
-  els.btnShutdown.addEventListener("click", async () => {
-    if (!confirm("Biztosan leállítod az ADÓ Agent alkalmazást?")) return;
-    try {
-      await fetch("/api/shutdown", { method: "POST" });
-    } catch (_) {}
-    document.body.innerHTML = `
-      <div style="max-width:560px;margin:80px auto;background:#fff;padding:30px;border-radius:14px;text-align:center;font-family:system-ui,sans-serif;border:1px solid #e2e8f0;">
-        <h2>ADÓ Agent leállítva</h2>
-        <p style="color:#475569;">Minden kiemelés, olvasott állapot és jegyzet elmentve. Ez a böngészőfül most bezárható.</p>
-      </div>
-    `;
-  });
+  // Kijelentkezés & Csoportkezelés
+  if (els.btnLogout) {
+    els.btnLogout.addEventListener("click", async () => {
+      await fetch("/api/auth/logout", { method: "POST" });
+      window.location.href = "/login";
+    });
+  }
+
+  async function renderUsersModal() {
+    const res = await fetch("/api/users");
+    if (!res.ok) return;
+    const data = await res.json();
+    els.usersManagerList.innerHTML = "";
+    for (const u of data.users || []) {
+      const row = document.createElement("div");
+      row.className = "src-mgr-row";
+      row.innerHTML = `
+        <div>
+          <strong>${escapeHtml(u.display_name)}</strong>
+          <span class="muted small">(@${escapeHtml(u.username)})</span>
+          ${u.is_admin ? `<span class="badge badge-eu">Admin</span>` : ""}
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm btn-del-user">Törlés</button>
+      `;
+      row.querySelector(".btn-del-user").addEventListener("click", async () => {
+        const delRes = await fetch(`/api/users/${u.id}`, { method: "DELETE" });
+        if (delRes.ok) {
+          showToast("Felhasználó törölve.");
+          renderUsersModal();
+        } else {
+          const err = await delRes.json();
+          showToast(err.error || "Nem törölhető.");
+        }
+      });
+      els.usersManagerList.appendChild(row);
+    }
+  }
+
+  if (els.btnUsers) {
+    els.btnUsers.addEventListener("click", () => {
+      renderUsersModal();
+      els.modalUsers.classList.remove("hidden");
+    });
+  }
+
+  if (els.formAddUser) {
+    els.formAddUser.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const payload = {
+        username: document.getElementById("new-user-username").value.trim(),
+        display_name: document.getElementById("new-user-display").value.trim(),
+        password: document.getElementById("new-user-password").value,
+        is_admin: document.getElementById("new-user-admin").checked,
+      };
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        els.formAddUser.reset();
+        showToast("Csoporttag létrehozva.");
+        renderUsersModal();
+      } else {
+        const err = await res.json();
+        showToast(err.error || "Hiba történt.");
+      }
+    });
+  }
+
+  // Kilépés (csak lokális asztali módban)
+  if (els.btnShutdown) {
+    els.btnShutdown.addEventListener("click", async () => {
+      if (!confirm("Biztosan leállítod az ADÓ Agent alkalmazást?")) return;
+      try {
+        await fetch("/api/shutdown", { method: "POST" });
+      } catch (_) {}
+      document.body.innerHTML = `
+        <div style="max-width:560px;margin:80px auto;background:#fff;padding:30px;border-radius:14px;text-align:center;font-family:system-ui,sans-serif;border:1px solid #e2e8f0;">
+          <h2>ADÓ Agent leállítva</h2>
+          <p style="color:#475569;">Ez a böngészőfül most bezárható.</p>
+        </div>
+      `;
+    });
+  }
 
   // Indulás
   fetchState();

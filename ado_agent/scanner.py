@@ -167,6 +167,13 @@ class TaxScanner:
                 total_new += n_cnt
                 total_updated += u_cnt
 
+        # Régebbi tárolt elemek címkéinek frissítése (pl. egyéni kulcsszavak / forrásnevek)
+        self.db.reclassify_items(
+            classifier,
+            source_tax_context={s.id: s.always_include_tax_context for s in self.config.sources},
+            source_names={s.id: s.name for s in self.config.sources},
+        )
+
         succeeded = sum(1 for r in source_results if r.status == "ok")
         warnings = sum(1 for r in source_results if r.status == "warning")
         failed = sum(1 for r in source_results if r.status == "error")

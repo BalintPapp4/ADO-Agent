@@ -17,6 +17,19 @@ from openpyxl.utils import get_column_letter
 from .models import LegislativeItem
 
 
+def _format_notes_and_comments(it: LegislativeItem) -> str:
+    parts: list[str] = []
+    if it.notes:
+        parts.append(it.notes)
+    for c in it.comments or []:
+        author = c.get("author_name") or "Felhasználó"
+        created = c.get("created_at") or ""
+        body = c.get("body") or ""
+        if body:
+            parts.append(f"[{author} • {created}] {body}" if created else f"[{author}] {body}")
+    return "\n".join(parts)
+
+
 def export_items_csv(items: list[LegislativeItem]) -> bytes:
     """UTF-8 BOM CSV, amelyet a magyar Excel is ékezethelyesen nyit meg."""
     buf = io.StringIO()
@@ -54,7 +67,7 @@ def export_items_csv(items: list[LegislativeItem]) -> bytes:
                 ", ".join(it.matched_keywords),
                 it.summary,
                 it.url,
-                it.notes,
+                _format_notes_and_comments(it),
             ]
         )
     return buf.getvalue().encode("utf-8-sig")
@@ -114,7 +127,7 @@ def export_items_xlsx(
             ", ".join(it.matched_keywords),
             it.summary,
             it.url,
-            it.notes,
+            _format_notes_and_comments(it),
         ]
         ws.append(row_values)
         r_idx = ws.max_row

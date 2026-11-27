@@ -61,11 +61,7 @@ def main() -> int:
         exe_path = dist_dir / "ADO-Agent.exe"
         target = release_dir / "ADO-Agent-windows-x64.exe"
         shutil.copy2(exe_path, target)
-        for bat_name in ("Inditas-Windows.bat", "ADO-Agent-CMD-Segito.bat"):
-            bat_src = ROOT / bat_name
-            if bat_src.exists():
-                shutil.copy2(bat_src, release_dir / bat_name)
-        print(f"Kész Windows futtatható fájl és CMD indítók: {release_dir}")
+        print(f"Kész Windows futtatható fájl: {target}")
 
     elif sys.platform == "darwin":
         # 1. Duplakattintásos macOS .app csomag
@@ -97,16 +93,10 @@ def main() -> int:
         cli_bin = dist_dir / "ado-agent-cli"
         subprocess.run(["cp", "-a", str(app_bundle), str(stage_dir / "ADO-Agent.app")], check=True)
         subprocess.run(["cp", "-a", str(cli_bin), str(stage_dir / "ado-agent-cli")], check=True)
-        for cmd_name in ("Inditas-Mac.command", "ADO-Agent-Mac-Terminal-Segito.command"):
-            cmd_src = ROOT / cmd_name
-            if cmd_src.exists():
-                dst = stage_dir / cmd_name
-                shutil.copy2(cmd_src, dst)
-                dst.chmod(0o755)
         zip_path = release_dir / "ADO-Agent-macos.zip"
         subprocess.run(["zip", "-ry", str(zip_path), "."], cwd=stage_dir, check=True)
         shutil.rmtree(stage_dir, ignore_errors=True)
-        print(f"Kész macOS csomag (.app + CLI + Terminal indítók): {zip_path}")
+        print(f"Kész macOS csomag (.app + CLI): {zip_path}")
 
     else:
         run_pyinstaller(

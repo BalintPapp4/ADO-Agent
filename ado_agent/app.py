@@ -1,8 +1,9 @@
-"""Fő belépési pont (Asztali webes felület + CLI) az ADÓ Agent alkalmazáshoz."""
+"""Fő belépési pont (Asztali webes felület + Csoportos web mód + CLI) az ADÓ Agent alkalmazáshoz."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def _configure_console_utf8() -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ado-agent",
-        description="ADÓ Agent — Magyar és EU-s adózási törvényjavaslat-figyelő (Windows & macOS)",
+        description="ADÓ Agent — Magyar és EU-s adózási törvényjavaslat-figyelő (Windows, macOS & Web)",
     )
     parser.add_argument("--version", action="version", version=f"{__app_name__} {__version__}")
     parser.add_argument(
@@ -79,6 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Első induláskor ne indítson automatikus háttér-ellenőrzést.",
     )
+    parser.add_argument(
+        "--auth",
+        action="store_true",
+        help="Többfelhasználós bejelentkezés és csoportos web mód engedélyezése.",
+    )
     return parser
 
 
@@ -127,16 +133,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Export elkészült ({len(items)} tétel): {out_path}")
         return 0
 
-    # Alapértelmezett asztali / böngészős mód
-    first_run = db.get_latest_scan_run() is None
-    should_auto_scan = (first_run or config.scan_on_every_start) and not args.no_auto_scan
+    auth_enabled = bool(
+        args.auth
+        or os.environ.get("ADO_AUTH_ENABLED", "").strip().lower() in ("1", "true", "yes")
+        or os.environ.get("ADO_USERS", "").strip()
+    )
+
+    default_interval = os.environ.get("ADO_DEFAULT_AUTO_SCAN_MINUTES", "").strip()
+    if default_interval.isdigit() and config.auto_scan_interval_minutes == 0:
+        config.auto_scan_interval_minutes = int(default_interval)
+        config.save()
+
+    first_run = db.get_latest_scan_run() is None and not args.no_auto_scan
     run_web_server(
         config=config,
         db=db,
         host=args.host,
         port=args.port,
-        open_browser=not args.no_browser,
-        scan_on_start=should_auto_scan,
+        open_browser=False if auth_enabled else (not args.no_browser),
+        scan_on_start=first_run,
+        auth_enabled=auth_enabled,
     )
     return 0
 

@@ -99,3 +99,35 @@ def test_custom_keywords():
     assert res.relevant is True
     assert "egyeni" in [m.category_id for m in res.category_matches]
     assert "e-nyugta" in res.matched_keywords
+
+
+def test_custom_keywords_hungarian_suffixes_and_accent_fallback():
+    clf = TaxClassifier(custom_keywords=["nyugdíj", "kulonado", "számla"])
+
+    # Magyar ragozás ("nyugdíj" -> "nyugdíjas", "nyugdíjak")
+    res_suf = clf.classify(
+        title="A nyugdíjasok kedvezményei és az SZJA változása",
+        summary="Részletek a nyugdíjak adómentességéről.",
+    )
+    assert res_suf.relevant is True
+    assert "egyeni" in [m.category_id for m in res_suf.category_matches]
+    assert "nyugdíj" in res_suf.matched_keywords
+
+    # Ékezet nélküli kulcsszó ("kulonado" -> "különadót", "különadóról")
+    res_acc = clf.classify(
+        title="Tájékoztató a kiskereskedelmi különadóról",
+        summary="Hogyan érinti a szektort a különadó?",
+    )
+    assert res_acc.relevant is True
+    assert "egyeni" in [m.category_id for m in res_acc.category_matches]
+    assert "kulonado" in res_acc.matched_keywords
+
+    # Szóvégi a -> á nyúlás magyar ragozáskor ("számla" -> "számlát", "számlázás")
+    res_stem = clf.classify(
+        title="Kötelező elektronikus számlázás 2027-től",
+        summary="Minden kiállított számlát be kell jelenteni.",
+    )
+    assert res_stem.relevant is True
+    assert "egyeni" in [m.category_id for m in res_stem.category_matches]
+    assert "számla" in res_stem.matched_keywords
+

@@ -35,25 +35,10 @@ def test_web_ui_and_api_crud(tmp_path: Path):
     # Egyéni kulcsszó és ütemezés mentése
     r_set = client.put(
         "/api/settings",
-        json={
-            "custom_keywords": ["e-nyugta", "kiskereskedelmi adó"],
-            "auto_scan_interval_minutes": 60,
-            "scan_on_every_start": False,
-        },
+        json={"custom_keywords": ["e-nyugta", "kiskereskedelmi adó"], "auto_scan_interval_minutes": 60},
     )
     assert r_set.status_code == 200
     assert r_set.get_json()["auto_scan_interval_minutes"] == 60
-    assert r_set.get_json()["scan_on_every_start"] is False
-
-    # 1-kattintásos indítók letöltése és Asztali létrehozás
-    for kind in ("windows-web", "windows-excel", "windows-menu", "mac-terminal", "mac-excel", "mac-menu"):
-        r_dl = client.get(f"/api/launchers/download/{kind}")
-        assert r_dl.status_code == 200 and len(r_dl.data) > 100
-
-    with patch("ado_agent.launchers.resolve_desktop_dir", return_value=tmp_path / "desktop"):
-        r_desk = client.post("/api/launchers/desktop")
-        assert r_desk.status_code == 200
-        assert len(r_desk.get_json()["files"]) >= 1
 
     # Új egyéni forrás felvétele, módosítása és törlése
     r_add = client.post(
@@ -104,3 +89,64 @@ def test_web_sync_scan_and_export(tmp_path: Path):
     r_csv = client.get("/api/export/csv")
     assert r_csv.status_code == 200
     assert "T/9999" in r_csv.data.decode("utf-8-sig")
+
+
+def test_custom_keywords_reclassify_existing_items_and_preserve_flags(tmp_path: Path):
+    from ado_agent.classifier import TaxClassifier
+    from ado_agent.models import RawCandidate
+
+    client, cfg, db = _test_client(tmp_path)
+    clf = TaxClassifier()
+    nav_src = next(s for s in cfg.sources if s.id == "nav_gov_hu")
+
+    item1 = clf.enrich_candidate(
+        RawCandidate(
+            title="SZJA és nyugdíjas kedvezmények 2027",
+            url="https://nav.gov.hu/ado/nyugdijas-szja",
+            summary="A különadóról és az adómentességről.",
+        ),
+        nav_src,
+    )
+    item2 = clf.enrich_candidate(
+        RawCandidate(
+            title="ÁFA bevallási határidő",
+            url="https://nav.gov.hu/ado/afa-hatarido",
+            summary="Általános forgalmi adó tudnivalók.",
+        ),
+        nav_src,
+    )
+    assert item1 is not None and item2 is not None
+    db.upsert_items([item1, item2])
+    db.update_item_flags(item1.item_key, is_read=True, is_bookmarked=True, notes="Fontos")
+
+    # Kezdetben az Egyéni kulcsszavak számláló 0
+    s0 = client.get("/api/state?category=egyeni").get_json()
+    assert s0["stats"]["by_category"].get("egyeni", 0) == 0
+    assert s0["items"] == []
+
+    # Felhasználó utólag hozzáad egyéni kulcsszót -> meglévő adatbázis azonnal újracímkéződik!
+    r_put = client.put("/api/settings", json={"custom_keywords": ["nyugdíj", "kulonado"]})
+    assert r_put.status_code == 200
+    assert r_put.get_json()["reclassified"]["custom_matched"] == 1
+
+    s1 = client.get("/api/state?category=egyeni").get_json()
+    assert s1["stats"]["by_category"]["egyeni"] == 1
+    assert len(s1["items"]) == 1
+    assert s1["items"][0]["item_key"] == item1.item_key
+    assert "nyugdíj" in s1["items"][0]["matched_keywords"]
+    assert "kulonado" in s1["items"][0]["matched_keywords"]
+    assert s1["items"][0]["is_read"] is True
+    assert s1["items"][0]["is_bookmarked"] is True
+    assert s1["items"][0]["notes"] == "Fontos"
+
+    # Kulcsszó eltávolításakor az 'egyeni' címke eltűnik, de a tétel és állapotok megmaradnak
+    r_clear = client.put("/api/settings", json={"custom_keywords": []})
+    assert r_clear.status_code == 200
+    assert r_clear.get_json()["reclassified"]["custom_matched"] == 0
+
+    s2 = client.get("/api/state?category=egyeni").get_json()
+    assert s2["stats"]["by_category"].get("egyeni", 0) == 0
+    assert s2["items"] == []
+    s_all = client.get("/api/state").get_json()
+    assert len(s_all["items"]) == 2
+

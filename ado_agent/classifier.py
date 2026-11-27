@@ -407,6 +407,23 @@ class ClassificationResult:
     matched_keywords: list[str] = field(default_factory=list)
 
 
+def _compile_custom_pattern(kw: str, use_accent_stripped: bool = False) -> re.Pattern[str]:
+    """Magyar ragozás- és ékezetbarát regex egyéni kulcsszavakhoz."""
+    target = strip_accents(kw) if use_accent_stripped else kw
+    if not target:
+        return re.compile(r"(?!x)x")
+    prefix = r"\b" if target[0].isalnum() else ""
+    if len(target) >= 3 and target[-1].lower() in ("a", "e"):
+        stem = re.escape(target[:-1])
+        tail = "[aá]" if target[-1].lower() == "a" else "[eé]"
+        body = f"{stem}{tail}"
+    else:
+        body = re.escape(target)
+    # 1-2 karakteres rövid szavaknál szigorú záró szóhatár, >=3 karakternél engedjük a magyar ragozást
+    suffix = r"\b" if (target[-1].isalnum() and len(target) <= 2) else ""
+    return re.compile(f"{prefix}{body}{suffix}", re.IGNORECASE)
+
+
 class TaxClassifier:
     """Rugalmas osztályozó beépített + felhasználói kulcsszavakkal."""
 
@@ -428,18 +445,16 @@ class TaxClassifier:
             self._compiled_rules.append((rule, pats))
 
         self._bill_patterns = [re.compile(p, re.IGNORECASE) for p in BILL_PATTERNS]
-        self._custom_patterns = [
-            (
-                kw,
-                re.compile(
-                    (r"\b" if kw[0].isalnum() else "")
-                    + re.escape(kw)
-                    + (r"\b" if kw[-1].isalnum() else ""),
-                    re.IGNORECASE,
-                ),
+        self._custom_patterns: list[tuple[str, re.Pattern[str], re.Pattern[str] | None]] = []
+        for kw in self.custom_keywords:
+            exact_pat = _compile_custom_pattern(kw, use_accent_stripped=False)
+            stripped_kw = strip_accents(kw)
+            accent_pat = (
+                _compile_custom_pattern(kw, use_accent_stripped=True)
+                if len(stripped_kw) >= 4
+                else None
             )
-            for kw in self.custom_keywords
-        ]
+            self._custom_patterns.append((kw, exact_pat, accent_pat))
 
     def classify(
         self,
@@ -513,12 +528,19 @@ class TaxClassifier:
                 for kw in cat_hits[:10]:
                     add_kw(kw)
 
-        # Egyéni felhasználói kulcsszavak
+        # Egyéni felhasználói kulcsszavak (ragozás- és ékezet-toleráns illesztéssel)
         custom_hits: list[str] = []
-        for kw, pat in self._custom_patterns:
-            if pat.search(combined):
-                custom_hits.append(kw)
-                add_kw(kw)
+        if self._custom_patterns:
+            custom_search_text = f"{combined}\n{doc_ref}" if doc_ref else combined
+            accent_search_text: str | None = None
+            for kw, pat, accent_pat in self._custom_patterns:
+                hit = bool(pat.search(custom_search_text))
+                if not hit and accent_pat is not None:
+                    if accent_search_text is None:
+                        accent_search_text = strip_accents(custom_search_text)
+                    hit = bool(accent_pat.search(accent_search_text))
+                if hit:
+                    custom_hits.append(kw)
 
         if custom_hits:
             matches.append(
@@ -580,13 +602,22 @@ class TaxClassifier:
         # Fontosság szerinti sorrend
         matches.sort(key=lambda m: m.score, reverse=True)
 
+        # Az egyéni kulcsszavakat garantáltan az elejére soroljuk, hogy a 18-as limit se vághassa le őket
+        final_keywords: list[str] = []
+        seen_final: set[str] = set()
+        for kw in custom_hits + all_keywords:
+            k_low = kw.lower()
+            if k_low not in seen_final:
+                seen_final.add(k_low)
+                final_keywords.append(kw)
+
         return ClassificationResult(
             relevant=True,
             relevance_score=total_score,
             is_bill=is_bill,
             document_ref=doc_ref,
             category_matches=matches,
-            matched_keywords=all_keywords[:15],
+            matched_keywords=final_keywords[:18],
         )
 
     def enrich_candidate(
