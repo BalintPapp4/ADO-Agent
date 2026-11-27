@@ -17,6 +17,27 @@ TEMPORAL_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Ismert Netjogtár docid -> teljes magyar törvénycím + rövidítés kiegészítés
+NETJOGTAR_KNOWN_TITLES: dict[str, str] = {
+    "a0700127.tv": "2007. évi CXXVII. törvény - az általános forgalmi adóról (Áfa tv.)",
+    "99500117.tv": "1995. évi CXVII. törvény - a személyi jövedelemadóról (Szja tv.)",
+    "a0800067.tv": "2008. évi LXVII. törvény - az energiaellátók jövedelemadójáról (Robin Hood adó)",
+    "99600081.tv": "1996. évi LXXXI. törvény - a társasági adóról és az osztalékadóról (Tao tv.)",
+    "a1700150.tv": "2017. évi CL. törvény - az adózás rendjéről (Art.)",
+    "a2200197.kor": "197/2022. (VI. 4.) Korm. rendelet az extraprofit adókról",
+    "99100082.tv": "1991. évi LXXXII. törvény - a gépjárműadóról (Gjt.)",
+    "99000100.tv": "1990. évi C. törvény - a helyi adókról (Htv.)",
+    "99000093.tv": "1990. évi XCIII. törvény - az illetékekről (Itv.)",
+    "a1700151.tv": "2017. évi CLI. törvény - az adóigazgatási rendtartásról (Air.)",
+    "a1700153.tv": "2017. évi CLIII. törvény - az adóhatóság által foganatosítandó végrehajtási eljárásokról (Avt.)",
+    "99400053.tv": "1994. évi LIII. törvény - a bírósági végrehajtásról (Vht.)",
+    "a1800052.tv": "2018. évi LII. törvény - a szociális hozzájárulási adóról (Szocho tv.)",
+    "a1900122.tv": "2019. évi CXXII. törvény - a társadalombiztosítás ellátásaira jogosultakról (Tbj.)",
+    "a1200147.tv": "2012. évi CXLVII. törvény - a kisadózó vállalkozások tételes adójáról és a kisvállalati adóról (Kiva)",
+    "a1600068.tv": "2016. évi LXVIII. törvény - a jövedéki adóról (Jöt.)",
+    "a0000100.tv": "2000. évi C. törvény - a számvitelről (Szt.)",
+}
+
 
 class NetJogtarAdapter(BaseSourceAdapter):
     """Wolters Kluwer Netjogtár változásfigyelő és törvénymonitor."""
@@ -32,11 +53,32 @@ class NetJogtarAdapter(BaseSourceAdapter):
         title_tag = soup.find("title")
         heading = normalize_whitespace(h1.get_text(" ", strip=True) if h1 else "")
         page_title = normalize_whitespace(title_tag.get_text(" ", strip=True) if title_tag else "")
-        title = heading or page_title
+        page_title = re.sub(
+            r"\s*[-–|]\s*(?:Hatályos Jogszabályok Gyűjteménye|Netjogtár).*$",
+            "",
+            page_title,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        docid_match = re.search(r"docid=([a-z0-9.]+)", res.final_url, re.IGNORECASE)
+        known_title = NETJOGTAR_KNOWN_TITLES.get(docid_match.group(1).lower(), "") if docid_match else ""
+
+        if heading and page_title and heading.lower() in page_title.lower() and len(page_title) > len(heading) + 4:
+            title = page_title
+        else:
+            title = heading or page_title or known_title
+
+        if known_title and title and len(title) < len(known_title) and title.lower() not in known_title.lower():
+            # Ha az oldal csak a rövid számot adta vissza (pl. "1991. évi LXXXII. törvény"), egészítsük ki
+            if not any(w in title.lower() for w in ("adó", "illeték", "végrehajt", "számvitel", "rendtartás")):
+                title = known_title
+        elif known_title and (not title or len(title) < 28):
+            title = known_title
+
         if not title or len(title) < 6:
             return []
 
-        for tag_name in ("script", "style", "noscript", "svg", "nav", "footer"):
+        for tag_name in ("script", "style", "noscript", "svg", "nav", "header", "footer", "aside"):
             for tag in soup.find_all(tag_name):
                 tag.decompose()
 

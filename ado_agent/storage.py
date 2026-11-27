@@ -15,8 +15,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .classifier import (
+    SENTENCE_SPLIT_RE,
     TaxClassifier,
     compute_effective_status,
+    match_hungarian_search,
     normalize_whitespace,
     strip_accents,
     strip_nav_boilerplate,
@@ -33,21 +35,12 @@ def _hu_compact(text: str) -> str:
 
 
 def _hu_contains(haystack: str | None, needle: str | None) -> int:
-    """Ékezet-, kis/nagybetű- és kötőjel-toleráns magyar keresés SQLite lekérdezésekhez."""
+    """Ékezet-, kis/nagybetű-, kötőjel-, pont/szóköz- és jogszabály-rövidítés-toleráns magyar keresés."""
     if not needle:
         return 1
     if not haystack:
         return 0
-    h_fold = _hu_fold(haystack)
-    h_compact = _hu_compact(haystack)
-    tokens = [t for t in _hu_fold(needle).split() if t]
-    if not tokens:
-        return 1
-    for tok in tokens:
-        tok_compact = _hu_compact(tok)
-        if tok not in h_fold and (not tok_compact or tok_compact not in h_compact):
-            return 0
-    return 1
+    return 1 if match_hungarian_search(haystack, needle) else 0
 
 
 def _compute_summary_diff(old_summary: str, new_summary: str, max_items: int = 3) -> list[str]:
@@ -58,11 +51,7 @@ def _compute_summary_diff(old_summary: str, new_summary: str, max_items: int = 3
         return []
 
     def split_clauses(txt: str) -> list[str]:
-        parts = re.split(
-            r"[\n|•;]+|(?<![0-9])(?<!\bévi)(?<!\btv)(?<!\bsz)(?<!\bkorm)(?<!\brend)\.\s+",
-            txt,
-            flags=re.IGNORECASE,
-        )
+        parts = SENTENCE_SPLIT_RE.split(txt)
         return [normalize_whitespace(p).strip(" -–:|•") for p in parts if len(normalize_whitespace(p)) >= 12]
 
     old_set = {c.lower() for c in split_clauses(old_clean)}
@@ -764,8 +753,7 @@ class Database:
             clauses.append(
                 "(HU_CONTAINS(items.title || ' ' || items.summary || ' ' || items.document_ref "
                 "|| ' ' || items.source_name || ' ' || items.matched_keywords_json "
-                "|| ' ' || items.category_names_json || ' ' || items.change_summary_json "
-                "|| ' ' || items.notes, ?) "
+                "|| ' ' || items.change_summary_json || ' ' || items.notes, ?) "
                 "OR EXISTS (SELECT 1 FROM item_comments ic WHERE ic.item_key = items.item_key AND HU_CONTAINS(ic.body, ?)))"
             )
             params.extend([q, q])
@@ -822,6 +810,11 @@ class Database:
         if eff_date and not eff_status:
             eff_status = compute_effective_status(eff_date)
         raw_changes = row["change_summary_json"] if "change_summary_json" in row.keys() else "[]"
+        clean_changes = [
+            strip_nav_boilerplate(c)
+            for c in json.loads(raw_changes or "[]")
+            if strip_nav_boilerplate(c) and not re.match(r"^\d{1,2}\.\)\s", strip_nav_boilerplate(c))
+        ]
 
         return LegislativeItem(
             item_key=row["item_key"],
@@ -836,7 +829,7 @@ class Database:
             status_label=row["status_label"],
             effective_date=eff_date,
             effective_status=eff_status,
-            change_summary=json.loads(raw_changes or "[]"),
+            change_summary=clean_changes,
             relevance_score=int(row["relevance_score"]),
             is_bill=bool(row["is_bill"]),
             categories=json.loads(row["categories_json"] or "[]"),
@@ -1005,10 +998,20 @@ class Database:
                 old_eff_status = row["effective_status"] or ""
                 new_eff_status = res.effective_status or compute_effective_status(new_eff_date)
                 old_changes = json.loads(row["change_summary_json"] or "[]")
+                preserved_markers = [
+                    strip_nav_boilerplate(c)
+                    for c in old_changes
+                    if (
+                        c.startswith("Új / módosult szövegrész:")
+                        or c.startswith("Hatályba lépett")
+                    )
+                    and strip_nav_boilerplate(c)
+                ]
                 merged_changes: list[str] = []
-                for c in (old_changes + res.change_summary):
-                    if c and c not in merged_changes:
-                        merged_changes.append(c)
+                for c in (preserved_markers + res.change_summary):
+                    cleaned_c = strip_nav_boilerplate(c)
+                    if cleaned_c and cleaned_c not in merged_changes:
+                        merged_changes.append(cleaned_c)
                 merged_changes = merged_changes[:6]
 
                 if "egyeni" in new_cats:

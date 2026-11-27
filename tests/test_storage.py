@@ -302,3 +302,57 @@ def test_legacy_sqlite_schema_migrates_without_losing_data(tmp_path: Path):
     assert "2017. évi CL." not in rows[0].summary
     assert rows[0].effective_date == "2027-01-01"
     assert rows[0].effective_status == "upcoming"
+
+
+def test_sqlite_abbreviation_search_and_reclassify_cleans_njt_artifacts(tmp_path: Path):
+    db = Database(tmp_path / "abbr_search.db")
+    clf = TaxClassifier()
+    njt_src = SourceConfig(id="njt_hu", name="NJT", adapter="njt", url="https://njt.jog.gov.hu/", jurisdiction="HU")
+    net_src = SourceConfig(id="net_jogtar_hu", name="Netjogtár", adapter="netjogtar", url="https://net.jogtar.hu/", jurisdiction="HU")
+
+    it_gjt = clf.enrich_candidate(
+        RawCandidate(
+            title="1991. évi LXXXII. törvény - a gépjárműadóról",
+            url="https://net.jogtar.hu/jogszabaly?docid=99100082.tv",
+            summary="A gépjárműadóról és a cégautóadóról szóló rendelkezések.",
+        ),
+        net_src,
+    )
+    it_art = clf.enrich_candidate(
+        RawCandidate(
+            title="2017. évi CL. törvény az adózás rendjéről",
+            url="https://njt.jog.gov.hu/jogszabaly/2017-150-00-00",
+            summary="Adózási eljárási határidők.",
+        ),
+        njt_src,
+    )
+    it_afa = clf.enrich_candidate(
+        RawCandidate(
+            title="2007. évi CXXVII. törvény a számla tartalmi követelményeiről",
+            url="https://njt.jog.gov.hu/jogszabaly/2007-127-00-00",
+            summary="Nemzeti Jogszabálytár Ugrás a keresőre Ugrás a tartalomra Céginformációs Portál EUR-LEX 197/2022. (VI. 4.) Korm. rendelet az extraprofit adókról és az áfáról.",
+        ),
+        njt_src,
+    )
+    assert it_gjt and it_art and it_afa
+    db.upsert_items([it_gjt, it_art, it_afa])
+
+    # Régi piszkos change_summary szimulálása DB-ben
+    with db._connect() as conn:
+        conn.execute(
+            "UPDATE items SET change_summary_json = ? WHERE item_key = ?",
+            (
+                '["Ugrás a keresőre 197/2022. (VI.", "4.) Korm. rendelet az extraprofit adókról"]',
+                it_afa.item_key,
+            ),
+        )
+
+    db.reclassify_items(clf)
+    cleaned_afa = db.query_items(search="CXXVII")[0]
+    assert "Ugrás a keresőre" not in cleaned_afa.summary
+    assert not any("Ugrás a keresőre" in c or c.startswith("4.)") for c in cleaned_afa.change_summary)
+
+    # SQLite HU_CONTAINS rövidítés és '1991.Évi gepjarműadó' tesztek
+    assert [i.item_key for i in db.query_items(search="1991.Évi gepjarműadó")] == [it_gjt.item_key]
+    assert [i.item_key for i in db.query_items(search="Gjt")] == [it_gjt.item_key]
+    assert [i.item_key for i in db.query_items(search="Art")] == [it_art.item_key]

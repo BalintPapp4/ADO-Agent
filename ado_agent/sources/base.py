@@ -94,4 +94,32 @@ def parse_generic_response(res: FetchResult, out: AdapterOutput) -> list[RawCand
 class GenericWebAdapter(BaseSourceAdapter):
     """Egyéni weboldalak és RSS/Atom hírfolyamok gyűjtője."""
 
-    pass
+    def parse_response(self, res: FetchResult, out: AdapterOutput) -> list[RawCandidate]:
+        cands = parse_generic_response(res, out)
+        if cands:
+            return cands
+        # Ha egy egyoldalas cikket vagy jogszabályt adott meg a felhasználó (nincs lista),
+        # vegyük fel magát az oldalt a <h1> vagy <title> alapján!
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(res.text, "lxml")
+        h1 = soup.find("h1")
+        title_tag = soup.find("title")
+        title = normalize_whitespace(
+            (h1.get_text(" ", strip=True) if h1 else "")
+            or (title_tag.get_text(" ", strip=True) if title_tag else "")
+        )
+        for tag_name in ("script", "style", "noscript", "svg", "nav", "header", "footer"):
+            for tag in list(soup.find_all(tag_name)):
+                if tag.parent is not None:
+                    tag.decompose()
+        if len(title) >= 8:
+            body = normalize_whitespace(soup.get_text(" ", strip=True))
+            return [
+                RawCandidate(
+                    title=title[:280],
+                    url=res.final_url,
+                    summary=body[:700],
+                )
+            ]
+        return []

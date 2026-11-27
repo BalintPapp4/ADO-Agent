@@ -253,6 +253,23 @@ CATEGORY_RULES: tuple[CategoryRule, ...] = (
             "telekadó",
             "termékdíj",
             "adóhatóság",
+            "1991. évi lxxxii",
+            "1990. évi c. törvény",
+            "helyi adókról",
+            "1990. évi xciii",
+            "illetékekről",
+            "2017. évi cli",
+            "adóigazgatási rendtartás",
+            "2017. évi cliii",
+            "végrehajtási eljárás",
+            "1994. évi liii",
+            "bírósági végrehajtás",
+            "2018. évi lii",
+            "2019. évi cxxii",
+            "2012. évi cxlvii",
+            "2016. évi lxviii",
+            "2000. évi c. törvény",
+            "számvitelről",
             "corporate income tax",
             "corporate tax",
             "local business tax",
@@ -274,6 +291,16 @@ CATEGORY_RULES: tuple[CategoryRule, ...] = (
             r"\bhipa\b",
             r"\bszocho\b",
             r"\bneta\b",
+            r"\bgjt\.?\b",
+            r"\bhtv\.?\b",
+            r"\bvht\.?\b",
+            r"\bart\.?\b",
+            r"\bair\.?\b",
+            r"\bavt\.?\b",
+            r"\bitv\.?\b",
+            r"\btbj\.?\b",
+            r"\bjöt\.?\b",
+            r"\bszt\.?\b",
             r"\badó-\s*[a-záéíóöőúüű]+\b",
         ),
     ),
@@ -365,11 +392,19 @@ NAV_BOILERPLATE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+NJT_BOILERPLATE_RE = re.compile(
+    r"(?:Nemzeti Jogszabálytár\s+)?Ugrás a keresőre\s+Ugrás a tartalomra.*?"
+    r"(?:EUR-LEX(?:\s+Nemzeti Jogszabálytár)*|Céginformációs Portál(?:\s+EUR-LEX)?(?:\s+Nemzeti Jogszabálytár)*)"
+    r"(?:\s+Megnyitott j(?:ogszabályok)?)?",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def strip_nav_boilerplate(text: str) -> str:
     if not text:
         return ""
     cleaned = NAV_BOILERPLATE_RE.sub("", text)
+    cleaned = NJT_BOILERPLATE_RE.sub("", cleaned)
     return normalize_whitespace(cleaned)
 
 
@@ -380,6 +415,105 @@ def strip_accents(text: str) -> str:
 
 def normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+# Magyar adó- és végrehajtási jogszabályok szabványos rövidítéseinek keresési feloldása
+STATUTORY_ABBREVIATIONS: dict[str, tuple[str, ...]] = {
+    "art": ("2017. evi cl.", "adozas rendjerol"),
+    "gjt": ("1991. evi lxxxii.", "gepjarmuado", "cegautoado"),
+    "htv": ("1990. evi c.", "helyi ado", "iparuzesi ado", "hipa"),
+    "vht": ("1994. evi liii.", "birosagi vegrehajtas"),
+    "air": ("2017. evi cli.", "adoigazgatasi rendtartas"),
+    "avt": ("2017. evi cliii.", "adohatosag altal foganatositando"),
+    "afa": ("2007. evi cxxvii.", "altalanos forgalmi ado"),
+    "szja": ("1995. evi cxvii.", "szemelyi jovedelemado"),
+    "tao": ("1996. evi lxxxi.", "tarsasagi ado"),
+    "itv": ("1990. evi xciii.", "illetekekrol"),
+    "tbj": ("2019. evi cxxii.", "tarsadalombiztositas"),
+    "szocho": ("2018. evi lii.", "szocialis hozzajarulasi ado"),
+    "kiva": ("2012. evi cxlvii.", "kisvallalati ado"),
+    "kata": ("2022. evi xiii.", "kisadozo"),
+    "jot": ("2016. evi lxviii.", "jovedeki ado"),
+    "szt": ("2000. evi c.", "szamvitelrol"),
+    "hpt": ("2013. evi ccxxxvii.", "hitelintezetekrol"),
+    "hipa": ("helyi iparuzesi ado", "1990. evi c."),
+    "neta": ("nepegeszsegugyi termekado",),
+    "ekaer": ("elektronikus kozuti aruk",),
+    "epr": ("kiterjesztett gyartoi felelosseg",),
+    "hrt": (),
+    "hvt": (),
+}
+
+_SHORT_WORD_BOUNDARY_RE_CACHE: dict[str, re.Pattern[str]] = {}
+
+
+def _abbr_word_pattern(tok_base: str) -> re.Pattern[str]:
+    pat = _SHORT_WORD_BOUNDARY_RE_CACHE.get(tok_base)
+    if pat is None:
+        pat = re.compile(
+            rf"\b{re.escape(tok_base)}(?:ban|ben|bol|rol|tol|hoz|nak|nek|ot|et|tal|tel|val|vel)?\b"
+        )
+        _SHORT_WORD_BOUNDARY_RE_CACHE[tok_base] = pat
+    return pat
+
+
+def match_hungarian_search(haystack: str, needle: str) -> bool:
+    """Ékezet-, kötőjel-, pont/szóköz- és jogszabály-rövidítés-toleráns keresés."""
+    if not needle:
+        return True
+    h_raw = strip_accents((haystack or "").lower())
+    n_raw = strip_accents((needle or "").lower()).strip()
+    if not n_raw:
+        return True
+
+    h_fold = re.sub(r"[-–—_/]+", " ", h_raw)
+    n_fold = re.sub(r"[-–—_/]+", " ", n_raw)
+
+    h_compact = re.sub(r"[^a-z0-9]", "", h_raw)
+    n_compact = re.sub(r"[^a-z0-9]", "", n_raw)
+
+    tokens = [t for t in n_fold.split() if t]
+    if not tokens:
+        return True
+
+    has_sensitive_token = any(
+        (t.strip(".,;:!?()[]{}") in STATUTORY_ABBREVIATIONS)
+        or (len(t.strip(".,;:!?()[]{}")) <= 4 and t.strip(".,;:!?()[]{}").isalpha())
+        for t in tokens
+    )
+    if not has_sensitive_token:
+        if n_fold in h_fold:
+            return True
+        if n_compact and len(n_compact) >= 5 and n_compact in h_compact:
+            return True
+
+    for tok in tokens:
+        tok_base = tok.strip(".,;:!?()[]{}")
+        if not tok_base:
+            continue
+
+        if tok_base in STATUTORY_ABBREVIATIONS:
+            expansions = STATUTORY_ABBREVIATIONS[tok_base]
+            if _abbr_word_pattern(tok_base).search(h_fold):
+                continue
+            if any(
+                exp in h_fold or re.sub(r"[^a-z0-9]", "", exp) in h_compact
+                for exp in expansions
+            ):
+                continue
+            return False
+
+        if len(tok_base) <= 4 and tok_base.isalpha():
+            if re.search(rf"\b{re.escape(tok_base)}", h_fold):
+                continue
+            return False
+
+        tok_compact = re.sub(r"[^a-z0-9]", "", tok_base)
+        if tok in h_fold or tok_base in h_fold or (tok_compact and tok_compact in h_compact):
+            continue
+        return False
+
+    return True
 
 
 def extract_document_ref(text: str) -> str:
@@ -540,6 +674,15 @@ _CHANGE_SENTENCE_CUE_RE = re.compile(
 )
 
 
+# Mondathatár: nem vágja szét a magyar dátumokat (pl. 2027. január 1.),
+# a római számokat (pl. (VI. 4.), CXXVII.), és a magyar jogi rövidítéseket (évi, Korm., tv., sz., stb.)
+SENTENCE_SPLIT_RE = re.compile(
+    r"[\n|•;]+|(?<![0-9])(?<![IVXLCDM])(?<!\bévi)(?<!\bÉvi)(?<!\btv)(?<!\bTv)(?<!\bsz)(?<!\bSz)"
+    r"(?<!\bkorm)(?<!\bKorm)(?<!\brend)(?<!\bRend)(?<!\bbek)(?<!\bBek)(?<!\bdr)(?<!\bDr)"
+    r"(?<!\bpl)(?<!\bPl)(?<!\bstb)(?<!\bStb)\.\s+"
+)
+
+
 def extract_change_summary(
     title: str,
     summary: str = "",
@@ -556,12 +699,7 @@ def extract_change_summary(
     if not raw_source:
         return []
 
-    # Mondathatár, amely nem vágja szét a magyar dátumokat (pl. 2027. január 1.) és törvényszámokat (2007. évi)
-    parts = re.split(
-        r"[\n|•;]+|(?<![0-9])(?<!\bévi)(?<!\btv)(?<!\bsz)(?<!\bkorm)(?<!\brend)(?<!\bbek)(?<!\bdr)\.\s+",
-        raw_source,
-        flags=re.IGNORECASE,
-    )
+    parts = SENTENCE_SPLIT_RE.split(raw_source)
 
     bullets: list[str] = []
     seen_low: set[str] = set()

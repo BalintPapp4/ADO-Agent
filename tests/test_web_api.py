@@ -163,7 +163,7 @@ def test_web_search_hungarian_case_and_effective_changes_filter(tmp_path: Path):
         RawCandidate(
             title="2007. évi CXXVII. törvény az általános forgalmi adóról (áfa)",
             url="https://net.jogtar.hu/jogszabaly?docid=a0700127.tv",
-            summary="2027. január 1-jétől hatályos e-nyugta és áfa-módosítás.",
+            summary="2027. január 1-jétől hatályos e-nyugta és a számla tartalmi szabályainak módosítása.",
         ),
         net_src,
     )
@@ -175,8 +175,16 @@ def test_web_search_hungarian_case_and_effective_changes_filter(tmp_path: Path):
         ),
         net_src,
     )
-    assert it_afa is not None and it_gja is not None
-    db.upsert_items([it_afa, it_gja])
+    it_art = clf.enrich_candidate(
+        RawCandidate(
+            title="2017. évi CL. törvény az adózás rendjéről (Art.)",
+            url="https://net.jogtar.hu/jogszabaly?docid=a1700150.tv",
+            summary="Adózási eljárási határidők és bírságszabályok.",
+        ),
+        net_src,
+    )
+    assert it_afa is not None and it_gja is not None and it_art is not None
+    db.upsert_items([it_afa, it_gja, it_art])
 
     r_upper = client.get("/api/state", query_string={"search": "Áfa"})
     r_lower = client.get("/api/state", query_string={"search": "áfa"})
@@ -189,6 +197,15 @@ def test_web_search_hungarian_case_and_effective_changes_filter(tmp_path: Path):
     assert r_gja.status_code == 200
     assert len(r_gja.get_json()["items"]) == 1
     assert r_gja.get_json()["items"][0]["item_key"] == it_gja.item_key
+
+    for q in ("1991.Évi gepjarműadó", "Gjt"):
+        r_q = client.get("/api/state", query_string={"search": q})
+        assert r_q.status_code == 200
+        assert [i["item_key"] for i in r_q.get_json()["items"]] == [it_gja.item_key]
+
+    r_art = client.get("/api/state", query_string={"search": "Art"})
+    assert r_art.status_code == 200
+    assert [i["item_key"] for i in r_art.get_json()["items"]] == [it_art.item_key]
 
     r_eff = client.get(
         "/api/state",

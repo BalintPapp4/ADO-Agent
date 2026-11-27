@@ -164,3 +164,70 @@ def test_effective_date_change_summary_and_nav_boilerplate_cleanup():
     assert len(res.change_summary) >= 1
     assert any("2026. évi LXXV. törvény" in c or "2027." in c for c in res.change_summary)
 
+
+def test_njt_boilerplate_roman_numeral_split_and_core_laws():
+    from ado_agent.classifier import extract_change_summary, strip_nav_boilerplate
+
+    raw_njt = (
+        "Nemzeti Jogszabálytár Ugrás a keresőre Ugrás a tartalomra Nemzeti Jogszabálytár "
+        "Magyar Jogi Információs Portál Magyar Közlöny Portál Céginformációs Portál EUR-LEX "
+        "Nemzeti Jogszabálytár Megnyitott jogszabályok "
+        "197/2022. (VI. 4.) Korm. rendelet az extraprofit adókról, amely 2027. január 1-jétől módosul."
+    )
+    cleaned = strip_nav_boilerplate(raw_njt)
+    assert "Ugrás a keresőre" not in cleaned
+    assert "Céginformációs Portál" not in cleaned
+    assert "197/2022. (VI. 4.) Korm. rendelet az extraprofit adókról" in cleaned
+
+    bullets = extract_change_summary(
+        "197/2022. (VI. 4.) Korm. rendelet az extraprofit adókról",
+        raw_njt,
+    )
+    assert bullets
+    assert not any(b.startswith("4.)") for b in bullets)
+    assert any("197/2022. (VI. 4.) Korm. rendelet" in b for b in bullets)
+
+    clf = TaxClassifier()
+    for law_title in (
+        "1991. évi LXXXII. törvény",
+        "1990. évi C. törvény",
+        "1994. évi LIII. törvény",
+        "2000. évi C. törvény",
+    ):
+        res = clf.classify(title=law_title, summary="")
+        assert res.relevant is True, f"A törvény nem kapott relevanciát: {law_title}"
+
+
+def test_hungarian_search_statutory_abbreviations_and_compact_queries():
+    from ado_agent.classifier import match_hungarian_search
+
+    gjt_text = "1991. évi LXXXII. törvény a gépjárműadóról"
+    art_text = "2017. évi CL. törvény az adózás rendjéről (Art.)"
+    afa_tartalom = "2007. évi CXXVII. törvény a számla tartalmi követelményeiről"
+    htv_text = "1990. évi C. törvény a helyi adókról és a HIPA szabályairól"
+    szt_text = "2000. évi C. törvény a számvitelről"
+    vht_text = "1994. évi LIII. törvény a bírósági végrehajtásról"
+
+    assert match_hungarian_search(gjt_text, "1991.Évi gepjarműadó") is True
+    assert match_hungarian_search(gjt_text, "Gjt") is True
+    assert match_hungarian_search(afa_tartalom, "Gjt") is False
+
+    # 'Art' megtalálja az Art. törvényt, de NEM találja meg a 'tartalmi' szót!
+    assert match_hungarian_search(art_text, "Art") is True
+    assert match_hungarian_search("2017. évi CL. törvény az adózás rendjéről", "Art") is True
+    assert match_hungarian_search(afa_tartalom, "Art") is False
+
+    # Htv vs Szt (mindkettő 'C. törvény', eltérő évszámmal)
+    assert match_hungarian_search(htv_text, "Htv") is True
+    assert match_hungarian_search(szt_text, "Htv") is False
+    assert match_hungarian_search(szt_text, "Szt") is True
+
+    # Vht
+    assert match_hungarian_search(vht_text, "Vht") is True
+    assert match_hungarian_search(art_text, "Vht") is False
+
+    # Hrt, Hvt szóhatáros egyezés (nem talál meg hamis részszavakat)
+    assert match_hungarian_search("Módosult a Hrt. 12. § szabálya", "Hrt") is True
+    assert match_hungarian_search("A hírtelevízió adása", "Hrt") is False
+    assert match_hungarian_search("A Hvt. szerinti kötelezettség", "Hvt") is True
+    assert match_hungarian_search("A miniszter hívta össze az ülést", "Hvt") is False

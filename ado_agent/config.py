@@ -81,9 +81,20 @@ def get_default_sources() -> list[SourceConfig]:
                 "https://net.jogtar.hu/jogszabaly?docid=99600081.tv",
                 "https://net.jogtar.hu/jogszabaly?docid=a1700150.tv",
                 "https://net.jogtar.hu/jogszabaly?docid=a2200197.kor",
+                "https://net.jogtar.hu/jogszabaly?docid=99100082.tv",
+                "https://net.jogtar.hu/jogszabaly?docid=99000100.tv",
+                "https://net.jogtar.hu/jogszabaly?docid=99000093.tv",
+                "https://net.jogtar.hu/jogszabaly?docid=a1700151.tv",
+                "https://net.jogtar.hu/jogszabaly?docid=a1700153.tv",
+                "https://net.jogtar.hu/jogszabaly?docid=99400053.tv",
+                "https://net.jogtar.hu/jogszabaly?docid=a1800052.tv",
+                "https://net.jogtar.hu/jogszabaly?docid=a1900122.tv",
+                "https://net.jogtar.hu/jogszabaly?docid=a1200147.tv",
+                "https://net.jogtar.hu/jogszabaly?docid=a1600068.tv",
+                "https://net.jogtar.hu/jogszabaly?docid=a0000100.tv",
             ],
             jurisdiction="HU",
-            description="Wolters Kluwer Netjogtár — friss jogszabályváltozások és a főbb adótörvények (Áfa, SZJA, Robin Hood, TAO, Art.) követése.",
+            description="Wolters Kluwer Netjogtár — friss jogszabályváltozások és a főbb adótörvények (Áfa, SZJA, Robin Hood, TAO, Art., Gjt., Htv., Vht.) követése.",
             badge_color="#0f766e",
             enabled=True,
             is_builtin=True,
@@ -100,10 +111,21 @@ def get_default_sources() -> list[SourceConfig]:
                 "https://njt.jog.gov.hu/jogszabaly/1996-81-00-00",
                 "https://njt.jog.gov.hu/jogszabaly/2017-150-00-00",
                 "https://njt.jog.gov.hu/jogszabaly/2022-197-20-22",
+                "https://njt.jog.gov.hu/jogszabaly/1991-82-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/1990-100-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/1990-93-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/2017-151-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/2017-153-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/1994-53-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/2018-52-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/2019-122-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/2012-147-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/2016-68-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/2000-100-00-00",
                 "https://njt.hu/",
             ],
             jurisdiction="HU",
-            description="A hivatalos Nemzeti Jogszabálytár (njt.jog.gov.hu) — adótörvények, módosítások és hatályos szövegek.",
+            description="A hivatalos Nemzeti Jogszabálytár (njt.jog.gov.hu) — adótörvények (Áfa, Szja, Tao, Art., Gjt., Htv., Vht., stb.) és hatályos szövegek.",
             badge_color="#15803d",
             enabled=True,
             is_builtin=True,
@@ -161,11 +183,15 @@ def get_default_sources() -> list[SourceConfig]:
         SourceConfig(
             id="adozona_hu",
             name="Adózóna (adozona.hu)",
-            adapter="web",
+            adapter="adozona",
             url="https://adozona.hu/",
-            extra_urls=["https://adozona.hu/rss", "https://adozona.hu/rss.xml"],
+            extra_urls=[
+                "https://adozona.hu/rss",
+                "https://adozona.hu/rss.xml",
+                "https://adozona.hu/feed",
+            ],
             jurisdiction="HU",
-            description="Szakmai adózási hírek és jogszabály-értelmezések.",
+            description="Szakmai adózási hírek és jogszabály-értelmezések (Cloudflare 403 esetén automatikus Google News RSS tükörrel).",
             badge_color="#6d28d9",
             enabled=False,
             is_builtin=True,
@@ -250,6 +276,9 @@ class AppConfig:
                     if existing.name != default_src.name or existing.description != default_src.description:
                         existing.name = default_src.name
                         existing.description = default_src.description
+                        migrated = True
+                    if existing.adapter != default_src.adapter:
+                        existing.adapter = default_src.adapter
                         migrated = True
                     # Elavult beépített elsődleges URL-ek frissítése (felhasználói kapcsolók és egyéni források megőrzésével)
                     if existing.id == "njt_hu" and "njt.hu" in existing.url and "njt.jog.gov.hu" not in existing.url:
