@@ -27,7 +27,7 @@ Minden találatot automatikusan pontoz, kategorizál és kiemeli az egyező kulc
 | **Kormány.hu** (`kormany.hu`) | HU | Társadalmi egyeztetésre bocsátott tervezetek, dokumentumtár, minisztériumi hírek |
 | **Netjogtár** (`net.jogtar.hu`) | HU | Jogszabályváltozások és főbb adótörvények (Áfa, SZJA, Robin Hood, TAO, Art.) |
 | **Nemzeti Jogszabálytár** (`njt.hu`) | HU | Hivatalos zöld jogszabálytár kulcstörvény-figyelő |
-| **NAV** (`nav.gov.hu` — *zöld*) | HU | Hivatalos adóhatósági hírek, jogszabályváltozások, RSS |
+| **NAV** (`nav.gov.hu`) | HU | Hivatalos adóhatósági hírek, jogszabályváltozások, RSS |
 | **Magyar Közlöny** (`magyarkozlony.hu`) | HU | Friss közlöny számok és kihirdetett jogszabályok |
 | **EUR-Lex / DG TAXUD / EP** (`eur-lex.europa.eu`) | EU | EU-s COM törvényjavaslatok, irányelvek, magyar és angol RSS/keresések |
 | *Opcionális:* `adozona.hu`, `ado.hu` | HU | A „Források” menüben 1 kattintással bekapcsolhatóak, + saját RSS/web URL is felvehető |
