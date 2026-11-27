@@ -1,4 +1,4 @@
-"""NAV (nav.gov.hu — zöld portál) forrásadapter."""
+"""NAV (nav.gov.hu) forrásadapter."""
 
 from __future__ import annotations
 

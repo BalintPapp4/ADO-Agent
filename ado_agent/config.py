@@ -89,7 +89,7 @@ def get_default_sources() -> list[SourceConfig]:
         ),
         SourceConfig(
             id="njt_hu",
-            name="Nemzeti Jogszabálytár (njt.hu — zöld)",
+            name="Nemzeti Jogszabálytár (njt.hu)",
             adapter="njt",
             url="https://njt.hu/",
             extra_urls=[
@@ -101,14 +101,14 @@ def get_default_sources() -> list[SourceConfig]:
                 "https://njt.hu/jogszabaly/2022-197-20-22",
             ],
             jurisdiction="HU",
-            description="A hivatalos zöld Nemzeti Jogszabálytár — adótörvények, módosítások és hatályos szövegek.",
+            description="A hivatalos Nemzeti Jogszabálytár — adótörvények, módosítások és hatályos szövegek.",
             badge_color="#15803d",
             enabled=True,
             is_builtin=True,
         ),
         SourceConfig(
             id="nav_gov_hu",
-            name="NAV (nav.gov.hu — zöld)",
+            name="NAV (nav.gov.hu)",
             adapter="nav",
             url="https://nav.gov.hu/ado",
             extra_urls=[
@@ -125,7 +125,7 @@ def get_default_sources() -> list[SourceConfig]:
         ),
         SourceConfig(
             id="magyar_kozlony",
-            name="Magyar Közlöny (magyarkozlony.hu — zöld)",
+            name="Magyar Közlöny (magyarkozlony.hu)",
             adapter="magyarkozlony",
             url="https://magyarkozlony.hu/",
             extra_urls=[
@@ -157,7 +157,7 @@ def get_default_sources() -> list[SourceConfig]:
         ),
         SourceConfig(
             id="adozona_hu",
-            name="Adózóna (adozona.hu — opcionális)",
+            name="Adózóna (adozona.hu)",
             adapter="web",
             url="https://adozona.hu/rss",
             extra_urls=["https://adozona.hu/"],
@@ -169,7 +169,7 @@ def get_default_sources() -> list[SourceConfig]:
         ),
         SourceConfig(
             id="ado_hu",
-            name="Adó Online (ado.hu — opcionális)",
+            name="Adó Online (ado.hu)",
             adapter="web",
             url="https://ado.hu/feed/",
             extra_urls=["https://ado.hu/"],
