@@ -78,6 +78,35 @@
       .replaceAll("'", "&#039;");
   }
 
+  const ABBR_HIGHLIGHT_MAP = {
+    art: ["2017. évi CL.", "adózás rendjéről"],
+    gjt: ["1991. évi LXXXII.", "gépjárműadó", "cégautóadó"],
+    htv: ["1990. évi C.", "helyi adó", "iparűzési adó", "HIPA"],
+    vht: ["1994. évi LIII.", "bírósági végrehajtás"],
+    air: ["2017. évi CLI.", "adóigazgatási rendtartás"],
+    avt: ["2017. évi CLIII.", "adóhatóság által foganatosítandó"],
+    afa: ["2007. évi CXXVII.", "általános forgalmi adó"],
+    szja: ["1995. évi CXVII.", "személyi jövedelemadó"],
+    tao: ["1996. évi LXXXI.", "társasági adó"],
+    itv: ["1990. évi XCIII.", "illetékekről"],
+    tbj: ["2019. évi CXXII.", "társadalombiztosítás"],
+    szocho: ["2018. évi LII.", "szociális hozzájárulási adó"],
+    kiva: ["2012. évi CXLVII.", "kisvállalati adó"],
+    kata: ["2022. évi XIII.", "kisadózó"],
+    jot: ["2016. évi LXVIII.", "jövedéki adó"],
+    szt: ["2000. évi C.", "számvitelről"],
+    hpt: ["2013. évi CCXXXVII.", "hitelintézetekről"],
+    hipa: ["helyi iparűzési adó", "1990. évi C."],
+  };
+
+  function foldHuBase(str) {
+    return String(str || "")
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/^[.,;:!?()[\]{}]+|[.,;:!?()[\]{}]+$/g, "");
+  }
+
   function buildAccentTolerantPattern(kw, allowSeparators = false) {
     const map = {
       a: "[aá]",
@@ -98,12 +127,17 @@
     const chars = [...kw].map((ch) => {
       const low = ch.toLowerCase();
       if (kw.length >= 2 && map[low]) return map[low];
+      if (allowSeparators && ch === ".") return "\\.?";
       return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     });
-    if (allowSeparators && chars.length >= 5 && chars.length <= 28) {
-      return chars.join("[-\\s]?");
+    const inner =
+      allowSeparators && chars.length >= 5 && chars.length <= 28
+        ? chars.join("[-.\\s]?")
+        : chars.join("");
+    if (/^[a-záéíóöőúüű]{2,4}$/i.test(kw)) {
+      return `(?<![a-z0-9áéíóöőúüű])${inner}(?![a-z0-9áéíóöőúüű])`;
     }
-    return chars.join("");
+    return inner;
   }
 
   function highlightText(rawText, keywords) {
@@ -114,7 +148,17 @@
           .map((t) => t.trim())
           .filter((t) => t.length >= 2)
       : [];
-    const allTerms = [...(keywords || []), ...searchTokens];
+    const expandedTokens = [];
+    for (const tok of searchTokens) {
+      expandedTokens.push(tok);
+      const base = foldHuBase(tok);
+      if (ABBR_HIGHLIGHT_MAP[base]) {
+        for (const exp of ABBR_HIGHLIGHT_MAP[base]) {
+          expandedTokens.push(exp);
+        }
+      }
+    }
+    const allTerms = [...(keywords || []), ...expandedTokens];
     if (!text || !allTerms.length) return escapeHtml(text);
     const seen = new Set();
     const sorted = [];
@@ -126,10 +170,10 @@
       sorted.push(k);
     }
     sorted.sort((a, b) => b.length - a.length);
-    const limited = sorted.slice(0, 14);
+    const limited = sorted.slice(0, 16);
     if (!limited.length) return escapeHtml(text);
     try {
-      const searchSet = new Set(searchTokens.map((t) => t.toLowerCase()));
+      const searchSet = new Set(expandedTokens.map((t) => t.toLowerCase()));
       const patterns = limited.map((k) =>
         buildAccentTolerantPattern(k, searchSet.has(k.toLowerCase()))
       );

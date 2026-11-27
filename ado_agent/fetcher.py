@@ -17,6 +17,11 @@ import feedparser
 import httpx
 from bs4 import BeautifulSoup
 
+try:
+    from curl_cffi import requests as _cffi_requests
+except Exception:  # pragma: no cover - opcionális CFFI TLS megszemélyesítés
+    _cffi_requests = None
+
 from .classifier import normalize_whitespace, strip_nav_boilerplate
 from .models import RawCandidate
 
@@ -28,6 +33,14 @@ DEFAULT_HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
     "Accept-Language": "hu-HU,hu;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate",
+    "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
     "Upgrade-Insecure-Requests": "1",
     "Cache-Control": "no-cache",
 }
@@ -79,6 +92,8 @@ class FetchResult:
 def format_fetch_error(raw_error: str) -> str:
     err = (raw_error or "").strip()
     low = err.lower()
+    if "403" in low and ("http 403" in low or low == "403"):
+        return "HTTP 403 — A célportál (Cloudflare / WAF védelem) letiltotta a felhős/automatizált lekérdezést."
     if "server disconnected without sending a response" in low or "remoteprotocolerror" in low:
         return "A célportál bontotta a kapcsolatot (szerveroldali WAF / felhős IP-korlátozás lehet)."
     if "timed out" in low or "timeout" in low:
@@ -91,7 +106,7 @@ def format_fetch_error(raw_error: str) -> str:
 
 
 class HttpFetcher:
-    """Robusztus HTTP kliens újrapróbálkozással, urllib tartalékkal és magyar kódolás-felismeréssel."""
+    """Robusztus HTTP kliens HTTP/2, Chrome TLS megszemélyesítés (curl_cffi) és urllib tartalékkal."""
 
     def __init__(
         self,
@@ -103,16 +118,56 @@ class HttpFetcher:
         self.verify_ssl = verify_ssl
         self._external_client = client
 
-    def _build_client(self, close_conn: bool = False) -> httpx.Client:
+    def _build_client(self, close_conn: bool = False, http2: bool = True) -> httpx.Client:
         headers = dict(DEFAULT_HEADERS)
         if close_conn:
             headers["Connection"] = "close"
-        return httpx.Client(
-            headers=headers,
-            timeout=httpx.Timeout(self.timeout_sec),
-            follow_redirects=True,
-            verify=self.verify_ssl,
-        )
+        try:
+            return httpx.Client(
+                headers=headers,
+                timeout=httpx.Timeout(self.timeout_sec),
+                follow_redirects=True,
+                verify=self.verify_ssl,
+                http2=http2,
+            )
+        except Exception:
+            return httpx.Client(
+                headers=headers,
+                timeout=httpx.Timeout(self.timeout_sec),
+                follow_redirects=True,
+                verify=self.verify_ssl,
+            )
+
+    def _fetch_via_curl_cffi(self, url: str) -> FetchResult | None:
+        if _cffi_requests is None:
+            return None
+        try:
+            resp = _cffi_requests.get(
+                url,
+                impersonate="chrome",
+                headers={
+                    "Accept": DEFAULT_HEADERS["Accept"],
+                    "Accept-Language": DEFAULT_HEADERS["Accept-Language"],
+                },
+                timeout=self.timeout_sec,
+                verify=self.verify_ssl,
+                allow_redirects=True,
+            )
+            ct = (resp.headers.get("content-type") or "").lower()
+            text = decode_response_text(resp.content, ct, getattr(resp, "encoding", None))
+            ok = 200 <= int(resp.status_code) < 400
+            err = "" if ok else format_fetch_error(f"HTTP {resp.status_code}")
+            return FetchResult(
+                url=url,
+                final_url=str(getattr(resp, "url", url) or url),
+                status_code=int(resp.status_code),
+                content_type=ct,
+                text=text,
+                ok=ok,
+                error=err,
+            )
+        except Exception:
+            return None
 
     def _fetch_via_urllib(self, url: str) -> FetchResult | None:
         req_headers = dict(DEFAULT_HEADERS)
@@ -136,7 +191,7 @@ class HttpFetcher:
                     content_type=ct,
                     text=text,
                     ok=ok,
-                    error="" if ok else f"HTTP {status}",
+                    error="" if ok else format_fetch_error(f"HTTP {status}"),
                 )
         except urllib.error.HTTPError as exc:
             return FetchResult(
@@ -146,50 +201,76 @@ class HttpFetcher:
                 content_type="",
                 text="",
                 ok=False,
-                error=f"HTTP {exc.code}",
+                error=format_fetch_error(f"HTTP {exc.code}"),
             )
         except Exception:
             return None
 
     def fetch(self, url: str, retries: int = 2) -> FetchResult:
         last_err = ""
+        last_status = 0
         for attempt in range(retries + 1):
             try:
                 if self._external_client is not None:
                     resp = self._external_client.get(url, headers=DEFAULT_HEADERS, follow_redirects=True)
                 else:
-                    with self._build_client(close_conn=(attempt > 0)) as client:
+                    use_http2 = attempt == 0
+                    with self._build_client(close_conn=(attempt > 0), http2=use_http2) as client:
                         resp = client.get(url)
 
                 ct = (resp.headers.get("content-type") or "").lower()
                 text = decode_response_text(resp.content, ct, resp.encoding)
-                ok = 200 <= resp.status_code < 400
-                err = "" if ok else f"HTTP {resp.status_code}"
-                return FetchResult(
-                    url=url,
-                    final_url=str(resp.url),
-                    status_code=resp.status_code,
-                    content_type=ct,
-                    text=text,
-                    ok=ok,
-                    error=err,
-                )
+                status = int(resp.status_code)
+                ok = 200 <= status < 400
+                if ok:
+                    return FetchResult(
+                        url=url,
+                        final_url=str(resp.url),
+                        status_code=status,
+                        content_type=ct,
+                        text=text,
+                        ok=True,
+                        error="",
+                    )
+                last_status = status
+                last_err = f"HTTP {status}"
+                # 403/429 esetén külső mock hiányában azonnal lépjünk tovább a böngésző TLS tartalékra
+                if status in (403, 429) and self._external_client is None:
+                    break
+                if self._external_client is not None:
+                    return FetchResult(
+                        url=url,
+                        final_url=str(resp.url),
+                        status_code=status,
+                        content_type=ct,
+                        text=text,
+                        ok=False,
+                        error=format_fetch_error(last_err),
+                    )
             except Exception as exc:
                 last_err = str(exc)
                 if attempt < retries:
-                    time.sleep(0.4 * (attempt + 1))
+                    time.sleep(0.35 * (attempt + 1))
 
         if self._external_client is None:
+            cffi_res = self._fetch_via_curl_cffi(url)
+            if cffi_res is not None and cffi_res.ok:
+                return cffi_res
+            if cffi_res is not None and cffi_res.status_code:
+                last_status = cffi_res.status_code
+                last_err = cffi_res.error or f"HTTP {cffi_res.status_code}"
+
             fallback = self._fetch_via_urllib(url)
             if fallback is not None and fallback.ok:
                 return fallback
             if fallback is not None and fallback.error and not last_err:
+                last_status = fallback.status_code
                 last_err = fallback.error
 
         return FetchResult(
             url=url,
             final_url=url,
-            status_code=0,
+            status_code=last_status,
             content_type="",
             text="",
             ok=False,

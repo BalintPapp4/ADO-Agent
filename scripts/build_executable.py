@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -19,7 +20,7 @@ def run_pyinstaller(args: list[str]) -> None:
 
 def common_data_args() -> list[str]:
     sep = os.pathsep
-    return [
+    args = [
         "--add-data",
         f"ado_agent/web/templates{sep}ado_agent/web/templates",
         "--add-data",
@@ -36,7 +37,12 @@ def common_data_args() -> list[str]:
         "waitress",
         "--hidden-import",
         "openpyxl",
+        "--hidden-import",
+        "h2",
     ]
+    if importlib.util.find_spec("curl_cffi") is not None:
+        args.extend(["--collect-all", "curl_cffi"])
+    return args
 
 
 def main() -> int:

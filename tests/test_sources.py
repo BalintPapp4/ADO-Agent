@@ -287,6 +287,16 @@ def test_app_config_migrates_legacy_njt_and_preserves_custom_sources(tmp_path: P
                 "is_builtin": True,
             },
             {
+                "id": "adozona_hu",
+                "name": "Adózóna (adozona.hu)",
+                "adapter": "web",
+                "url": "https://adozona.hu/",
+                "extra_urls": ["https://adozona.hu/rss"],
+                "jurisdiction": "HU",
+                "enabled": True,
+                "is_builtin": True,
+            },
+            {
                 "id": "custom_nav_test",
                 "name": "Saját adóblog",
                 "adapter": "web",
@@ -304,7 +314,99 @@ def test_app_config_migrates_legacy_njt_and_preserves_custom_sources(tmp_path: P
     assert by_id["njt_hu"].url == "https://njt.jog.gov.hu/"
     assert by_id["njt_hu"].enabled is False  # Felhasználói kapcsoló megőrizve!
     assert "https://njt.hu/" in by_id["njt_hu"].extra_urls
+    assert "https://njt.jog.gov.hu/jogszabaly/1991-82-00-00" in by_id["njt_hu"].extra_urls
+    assert "https://net.jogtar.hu/jogszabaly?docid=99100082.tv" in by_id["net_jogtar_hu"].extra_urls
+    assert by_id["adozona_hu"].adapter == "adozona"
+    assert by_id["adozona_hu"].enabled is True
     assert by_id["parlament_hu"].url == "https://www.parlament.hu/iromanyok-lekerdezese"
     assert "https://www.parlament.hu/" in by_id["parlament_hu"].extra_urls
     assert "custom_nav_test" in by_id
     assert loaded.custom_keywords == ["gépjárműadó"]
+
+
+def test_adozona_403_google_news_fallback_and_custom_netjogtar_gjt(tmp_path: Path):
+    from ado_agent.models import SourceConfig
+
+    google_rss = """<?xml version="1.0" encoding="utf-8"?>
+    <rss version="2.0"><channel><title>Google News site:adozona.hu</title>
+      <item>
+        <title>Változik a gépjárműadó és az ÁFA-bevallás 2027-től - Adózóna.hu</title>
+        <link>https://news.google.com/rss/articles/adozona-test-1</link>
+        <description>Adózási szakmai összefoglaló a cégautóadó és áfa változásairól.</description>
+        <pubDate>Thu, 26 Nov 2026 08:00:00 GMT</pubDate>
+      </item>
+    </channel></rss>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "news.google.com" in url:
+            return httpx.Response(200, text=google_rss, headers={"content-type": "application/rss+xml; charset=utf-8"})
+        if "adozona.hu" in url:
+            return httpx.Response(403, text="Cloudflare Forbidden")
+        if "net.jogtar.hu" in url and "99100082.tv" in url:
+            html = """
+            <html><head><title>1991. évi LXXXII. törvény - Netjogtár</title></head><body>
+              <h1>1991. évi LXXXII. törvény</h1>
+              <p>A gépjárműadóról és a cégautóadóról szóló szabályok 2027. január 1-jétől módosulnak.</p>
+            </body></html>
+            """
+            return httpx.Response(200, text=html, headers={"content-type": "text/html; charset=utf-8"})
+        if "njt.jog.gov.hu" in url and "2022-197-20-22" in url:
+            html = """
+            <html><head><title>197/2022. (VI. 4.) Korm. rendelet - Nemzeti Jogszabálytár</title></head><body>
+              <div class="skip-links">
+                <a href="#s">Ugrás a keresőre</a> <a href="#c">Ugrás a tartalomra</a>
+              </div>
+              <nav class="navbar">Magyar Jogi Információs Portál EUR-LEX</nav>
+              <main>
+                <h1>197/2022. (VI. 4.) Korm. rendelet az extraprofit adókról</h1>
+                <p>197/2022. (VI. 4.) Korm. rendelet az extraprofit adókról szóló módosítás 2027. január 1-jétől hatályos.</p>
+              </main>
+            </body></html>
+            """
+            return httpx.Response(200, text=html, headers={"content-type": "text/html; charset=utf-8"})
+        return httpx.Response(404, text="Not found")
+
+    adozona_src = next(s for s in get_default_sources() if s.id == "adozona_hu")
+    adozona_src.enabled = True
+    custom_netjogtar = SourceConfig(
+        id="custom_gjt",
+        name="Netjogtár (gépjárműadó-törvény)",
+        adapter="web",  # UI alapértelmezett 'web' értékkel is NetJogtarAdapterre kell irányítódnia!
+        url="https://net.jogtar.hu/jogszabaly?docid=99100082.tv",
+        jurisdiction="HU",
+        enabled=True,
+        is_builtin=False,
+    )
+    njt_src = SourceConfig(
+        id="njt_test",
+        name="NJT",
+        adapter="njt",
+        url="https://njt.jog.gov.hu/jogszabaly/2022-197-20-22",
+        jurisdiction="HU",
+        enabled=True,
+        is_builtin=False,
+    )
+
+    cfg = AppConfig(data_dir=tmp_path, sources=[adozona_src, custom_netjogtar, njt_src])
+    db = Database(cfg.db_path)
+    scanner = TaxScanner(cfg, db, fetcher=HttpFetcher(client=httpx.Client(transport=httpx.MockTransport(handler))))
+    summary = scanner.run_scan()
+
+    assert summary.failed_sources == 0
+    sr_map = {sr.source_id: sr for sr in summary.source_results}
+    assert sr_map["adozona_hu"].status == "ok"
+    assert sr_map["adozona_hu"].matched_items >= 1
+    assert sr_map["custom_gjt"].status == "ok"
+    assert sr_map["custom_gjt"].matched_items == 1
+
+    # Gépjárműadó-törvény megtalálható '1991.Évi gepjarműadó' ÉS 'Gjt' kereséssel is!
+    assert len(db.query_items(search="1991.Évi gepjarműadó", source_id="custom_gjt")) == 1
+    assert len(db.query_items(search="Gjt", source_id="custom_gjt")) == 1
+
+    # NJT kártya tiszta (nincs Ugrás a keresőre, és nincs '4.)' törés)
+    njt_items = db.query_items(source_id="njt_test")
+    assert len(njt_items) == 1
+    assert "Ugrás a keresőre" not in njt_items[0].summary
+    assert not any(c.startswith("4.)") for c in njt_items[0].change_summary)
