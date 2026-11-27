@@ -41,9 +41,18 @@
         <button id="btn-settings" class="btn btn-secondary" type="button">
           ⚙ Kulcsszavak &amp; Ütemezés
         </button>
-        <button id="btn-shutdown" class="btn btn-danger-outline" type="button" title="Alkalmazás biztonságos bezárása">
-          ⏻ Kilépés
-        </button>
+
+        {% if auth_enabled and current_user %}
+          {% if current_user.is_admin %}
+            <button id="btn-users" class="btn btn-secondary" type="button">👥 Csoport</button>
+          {% endif %}
+          <span class="user-pill" title="Bejelentkezve">👤 {{ current_user.display_name }}</span>
+          <button id="btn-logout" class="btn btn-danger-outline" type="button">↪ Kijelentkezés</button>
+        {% elif not web_mode %}
+          <button id="btn-shutdown" class="btn btn-danger-outline" type="button" title="Alkalmazás biztonságos bezárása">
+            ⏻ Kilépés
+          </button>
+        {% endif %}
       </div>
     </div>
 
@@ -95,7 +104,7 @@
     <section class="panel filters-panel">
       <div class="filters-row">
         <div class="search-box">
-          <input id="filter-search" type="search" placeholder="Keresés címben, törvényszámban (pl. T/123, COM), kulcsszóban vagy jegyzetben...">
+          <input id="filter-search" type="search" placeholder="Keresés címben, törvényszámban (pl. T/123, COM), kulcsszóban vagy megjegyzésben...">
         </div>
 
         <select id="filter-jurisdiction" aria-label="Joghatóság">
@@ -126,6 +135,12 @@
         </label>
         <label class="toggle-chip">
           <input type="checkbox" id="filter-only-bookmarked"> Csak kiemeltek (★)
+        </label>
+        <label class="toggle-chip">
+          <input type="checkbox" id="filter-only-unread"> Csak olvasatlanok
+        </label>
+        <label class="toggle-chip">
+          <input type="checkbox" id="filter-only-read"> Csak olvasottak
         </label>
         <div class="spacer"></div>
         <button id="btn-mark-all-read" class="btn btn-ghost btn-sm" type="button">
@@ -202,6 +217,7 @@
             <option value="30">30 percenként</option>
             <option value="60">Óránként</option>
             <option value="240">4 óránként</option>
+            <option value="360">6 óránként</option>
             <option value="720">12 óránként</option>
             <option value="1440">Naponta (24 óránként)</option>
           </select>
@@ -210,6 +226,32 @@
         <div class="modal-footer">
           <button id="btn-save-settings" class="btn btn-primary" type="button">Beállítások mentése</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Csoporttagok kezelése modal (Admin) -->
+  <div id="modal-users" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Csoporttagok kezelése</h3>
+        <button class="modal-close" data-close="modal-users" type="button">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted">Minden csoporttag külön olvasott/olvasatlan és kiemelt listát kap, a megjegyzések pedig névvel jelennek meg.</p>
+        <div id="users-manager-list" class="sources-manager-list"></div>
+
+        <hr>
+        <h4>+ Új csoporttag felvétele</h4>
+        <form id="form-add-user" class="add-user-form">
+          <input id="new-user-username" type="text" placeholder="Felhasználónév (pl. anna)" required>
+          <input id="new-user-display" type="text" placeholder="Megjelenített név (pl. Kiss Anna)">
+          <input id="new-user-password" type="password" placeholder="Jelszó (min. 4 kar.)" required>
+          <label class="toggle-chip">
+            <input id="new-user-admin" type="checkbox"> Admin
+          </label>
+          <button class="btn btn-primary" type="submit">Létrehozás</button>
+        </form>
       </div>
     </div>
   </div>

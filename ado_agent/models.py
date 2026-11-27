@@ -51,6 +51,7 @@ class LegislativeItem:
     is_read: bool = False
     is_bookmarked: bool = False
     notes: str = ""
+    comments: list[dict[str, Any]] = field(default_factory=list)
     raw_metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -78,6 +79,7 @@ class LegislativeItem:
             "is_read": self.is_read,
             "is_bookmarked": self.is_bookmarked,
             "notes": self.notes,
+            "comments": self.comments,
             "raw_metadata": self.raw_metadata,
         }
 

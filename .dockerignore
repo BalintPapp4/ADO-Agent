@@ -1,0 +1,14 @@
+.git
+.venv
+.venv_mac
+__pycache__
+*.pyc
+tests
+scripts
+dist
+build
+*.db
+*.sqlite3
+*.zip
+inditas_windows.bat
+inditas_mac.command
