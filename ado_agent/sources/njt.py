@@ -1,4 +1,4 @@
-"""Nemzeti Jogszabálytár (njt.hu — zöld portál) forrásadapter."""
+"""Nemzeti Jogszabálytár (njt.hu — hivatalos lap) forrásadapter."""
 
 from __future__ import annotations
 
