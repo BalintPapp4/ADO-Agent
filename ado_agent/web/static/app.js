@@ -9,6 +9,7 @@
     only_read: false,
     only_bills: false,
     only_bookmarked: false,
+    only_effective_changes: false,
     sort_by: "relevance",
     data: null,
     pollTimer: null,
@@ -32,6 +33,7 @@
     kpiNew: document.getElementById("kpi-new"),
     kpiUnread: document.getElementById("kpi-unread"),
     kpiBills: document.getElementById("kpi-bills"),
+    kpiEffectiveSub: document.getElementById("kpi-effective-sub"),
     kpiBookmarked: document.getElementById("kpi-bookmarked"),
     kpiLastRun: document.getElementById("kpi-lastrun"),
     sourcePills: document.getElementById("source-status-pills"),
@@ -41,6 +43,8 @@
     filterSort: document.getElementById("filter-sort"),
     categoryChips: document.getElementById("category-chips"),
     filterOnlyNew: document.getElementById("filter-only-new"),
+    filterOnlyEffective: document.getElementById("filter-only-effective"),
+    effCountBadge: document.getElementById("eff-count-badge"),
     filterOnlyUnread: document.getElementById("filter-only-unread"),
     filterOnlyRead: document.getElementById("filter-only-read"),
     filterOnlyBills: document.getElementById("filter-only-bills"),
@@ -74,7 +78,7 @@
       .replaceAll("'", "&#039;");
   }
 
-  function buildAccentTolerantPattern(kw) {
+  function buildAccentTolerantPattern(kw, allowSeparators = false) {
     const map = {
       a: "[aá]",
       á: "[aá]",
@@ -91,25 +95,45 @@
       ü: "[uúüű]",
       ű: "[uúüű]",
     };
-    return [...kw]
-      .map((ch) => {
-        const low = ch.toLowerCase();
-        if (kw.length >= 4 && map[low]) return map[low];
-        return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      })
-      .join("");
+    const chars = [...kw].map((ch) => {
+      const low = ch.toLowerCase();
+      if (kw.length >= 2 && map[low]) return map[low];
+      return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    });
+    if (allowSeparators && chars.length >= 5 && chars.length <= 28) {
+      return chars.join("[-\\s]?");
+    }
+    return chars.join("");
   }
 
   function highlightText(rawText, keywords) {
     const text = String(rawText || "");
-    if (!text || !keywords || !keywords.length) return escapeHtml(text);
-    const sorted = [...keywords]
-      .filter((k) => k && k.length >= 2)
-      .sort((a, b) => b.length - a.length)
-      .slice(0, 12);
-    if (!sorted.length) return escapeHtml(text);
+    const searchTokens = state.search
+      ? state.search
+          .split(/\s+/)
+          .map((t) => t.trim())
+          .filter((t) => t.length >= 2)
+      : [];
+    const allTerms = [...(keywords || []), ...searchTokens];
+    if (!text || !allTerms.length) return escapeHtml(text);
+    const seen = new Set();
+    const sorted = [];
+    for (const k of allTerms) {
+      if (!k || k.length < 2) continue;
+      const low = k.toLowerCase();
+      if (seen.has(low)) continue;
+      seen.add(low);
+      sorted.push(k);
+    }
+    sorted.sort((a, b) => b.length - a.length);
+    const limited = sorted.slice(0, 14);
+    if (!limited.length) return escapeHtml(text);
     try {
-      const combined = new RegExp(`(${sorted.map(buildAccentTolerantPattern).join("|")})`, "gi");
+      const searchSet = new Set(searchTokens.map((t) => t.toLowerCase()));
+      const patterns = limited.map((k) =>
+        buildAccentTolerantPattern(k, searchSet.has(k.toLowerCase()))
+      );
+      const combined = new RegExp(`(${patterns.join("|")})`, "giu");
       let out = "";
       let lastIdx = 0;
       for (const m of text.matchAll(combined)) {
@@ -142,22 +166,40 @@
     if (state.only_read) params.set("only_read", "1");
     if (state.only_bills) params.set("only_bills", "1");
     if (state.only_bookmarked) params.set("only_bookmarked", "1");
+    if (state.only_effective_changes) params.set("only_effective_changes", "1");
     if (state.sort_by) params.set("sort_by", state.sort_by);
     return params.toString();
   }
 
   async function fetchState() {
     const qs = buildFilterQuery();
-    const res = await fetch(`/api/state?${qs}`);
-    if (res.status === 401) {
-      window.location.href = "/login";
-      return;
-    }
-    const data = await res.json();
-    state.data = data;
-    renderAll(data);
-    if (data.scan_status && data.scan_status.running) {
-      startScanPolling();
+    try {
+      const res = await fetch(`/api/state?${qs}`);
+      if (res.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
+      if (!res.ok) {
+        let errText = `HTTP ${res.status}`;
+        try {
+          const errJson = await res.json();
+          if (errJson && errJson.error) errText = errJson.error;
+        } catch (_) {}
+        throw new Error(errText);
+      }
+      const data = await res.json();
+      state.data = data;
+      renderAll(data);
+      if (data.scan_status && data.scan_status.running) {
+        startScanPolling();
+      }
+    } catch (err) {
+      els.itemsList.innerHTML = `
+        <div class="empty-state">
+          <h3>Hiba történt az adatok lekérésekor</h3>
+          <p>${escapeHtml(err && err.message ? err.message : "Ismeretlen hiba a szerverrel való kommunikáció során.")}</p>
+        </div>
+      `;
     }
   }
 
@@ -178,6 +220,15 @@
     els.kpiNew.textContent = (st.new_count || 0) + (st.updated_count || 0);
     els.kpiUnread.textContent = `Olvasatlan összesen: ${st.unread_count || 0}`;
     els.kpiBills.textContent = st.bills_count || 0;
+    const effTotal = st.effective_changes_count || 0;
+    const upCnt = st.upcoming_changes_count || 0;
+    const infCnt = st.in_force_changes_count || 0;
+    if (els.kpiEffectiveSub) {
+      els.kpiEffectiveSub.textContent = `Jövőbeli változás: ${upCnt} • Hatályba lépett: ${infCnt}`;
+    }
+    if (els.effCountBadge) {
+      els.effCountBadge.textContent = effTotal;
+    }
     els.kpiBookmarked.textContent = st.bookmarked_count || 0;
     if (data.latest_run) {
       els.kpiLastRun.textContent = `Utolsó futás: ${data.latest_run.finished_at}`;
@@ -285,6 +336,17 @@
       const badges = [];
       if (it.is_new) badges.push(`<span class="badge badge-new">ÚJ</span>`);
       else if (it.is_updated) badges.push(`<span class="badge badge-upd">FRISSÜLT</span>`);
+      if (it.effective_status === "upcoming") {
+        badges.push(
+          `<span class="badge badge-eff-upcoming">⚠ Változás: ${escapeHtml(it.effective_date || "közelgő")}</span>`
+        );
+      } else if (it.effective_status === "in_force") {
+        badges.push(
+          `<span class="badge badge-eff-inforce">⚡ Hatályba lépett: ${escapeHtml(it.effective_date || "friss")}</span>`
+        );
+      } else if (it.effective_date) {
+        badges.push(`<span class="badge badge-ref">Hatályos: ${escapeHtml(it.effective_date)}</span>`);
+      }
       if (it.is_bill) badges.push(`<span class="badge badge-bill">Törvényjavaslat / Tervezet</span>`);
       badges.push(
         `<span class="badge ${it.jurisdiction === "EU" ? "badge-eu" : "badge-hu"}">${escapeHtml(it.jurisdiction)}</span>`
@@ -298,6 +360,33 @@
 
       const highlightedSummary = highlightText(it.summary || "", it.matched_keywords || []);
       const highlightedTitle = highlightText(it.title, it.matched_keywords || []);
+
+      let effBannerHtml = "";
+      if (it.effective_status === "upcoming") {
+        effBannerHtml = `
+          <div class="eff-banner eff-upcoming">
+            <strong>⚠ Figyelmeztetés — közelgő hatálybalépés (${escapeHtml(it.effective_date)}):</strong>
+            <span>Ez a jogszabály vagy módosítás a jelzett napon lép hatályba.</span>
+          </div>
+        `;
+      } else if (it.effective_status === "in_force") {
+        effBannerHtml = `
+          <div class="eff-banner eff-inforce">
+            <strong>⚡ Frissült — hatályba lépett (${escapeHtml(it.effective_date)}):</strong>
+            <span>A módosított szabályozás hatályba lépett.</span>
+          </div>
+        `;
+      }
+
+      const changes = Array.isArray(it.change_summary) ? it.change_summary : [];
+      const changesHtml = changes.length
+        ? `
+          <div class="change-details">
+            <strong>Érintett változások / rendelkezések:</strong>
+            <ul>${changes.map((c) => `<li>${highlightText(c, it.matched_keywords || [])}</li>`).join("")}</ul>
+          </div>
+        `
+        : "";
 
       const comments = it.comments || [];
       const commentsHtml = comments
@@ -333,6 +422,8 @@
           <a href="${escapeHtml(it.url)}" target="_blank" rel="noopener noreferrer">${highlightedTitle}</a>
         </h3>
         <div class="item-cats">${catTags}</div>
+        ${effBannerHtml}
+        ${changesHtml}
         ${it.summary ? `<p class="item-summary">${highlightedSummary}</p>` : ""}
         <div class="item-footer">
           <div>
@@ -516,6 +607,12 @@
     state.only_new = els.filterOnlyNew.checked;
     fetchState();
   });
+  if (els.filterOnlyEffective) {
+    els.filterOnlyEffective.addEventListener("change", () => {
+      state.only_effective_changes = els.filterOnlyEffective.checked;
+      fetchState();
+    });
+  }
   if (els.filterOnlyUnread) {
     els.filterOnlyUnread.addEventListener("change", () => {
       state.only_unread = els.filterOnlyUnread.checked;

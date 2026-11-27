@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import re
+import ssl
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -13,17 +17,19 @@ import feedparser
 import httpx
 from bs4 import BeautifulSoup
 
-from .classifier import normalize_whitespace
+from .classifier import normalize_whitespace, strip_nav_boilerplate
 from .models import RawCandidate
 
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/128.0.0.0 Safari/537.36 ADO-Agent/1.0"
+        "Chrome/131.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
     "Accept-Language": "hu-HU,hu;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Upgrade-Insecure-Requests": "1",
+    "Cache-Control": "no-cache",
 }
 
 NOISE_TITLES = {
@@ -70,8 +76,22 @@ class FetchResult:
     error: str = ""
 
 
+def format_fetch_error(raw_error: str) -> str:
+    err = (raw_error or "").strip()
+    low = err.lower()
+    if "server disconnected without sending a response" in low or "remoteprotocolerror" in low:
+        return "A célportál bontotta a kapcsolatot (szerveroldali WAF / felhős IP-korlátozás lehet)."
+    if "timed out" in low or "timeout" in low:
+        return "Időtúllépés a szerver válaszára várva."
+    if "name or service not known" in low or "getaddrinfo" in low or "nodename nor servname" in low:
+        return "A domain név nem érhető el (DNS hiba)."
+    if "certificate" in low or "ssl" in low:
+        return "TLS/SSL tanúsítvány- vagy kapcsolat-hiba."
+    return err or "Ismeretlen hálózati hiba"
+
+
 class HttpFetcher:
-    """Robusztus HTTP kliens újrapróbálkozással és magyar kódolás-felismeréssel."""
+    """Robusztus HTTP kliens újrapróbálkozással, urllib tartalékkal és magyar kódolás-felismeréssel."""
 
     def __init__(
         self,
@@ -83,13 +103,53 @@ class HttpFetcher:
         self.verify_ssl = verify_ssl
         self._external_client = client
 
-    def _build_client(self) -> httpx.Client:
+    def _build_client(self, close_conn: bool = False) -> httpx.Client:
+        headers = dict(DEFAULT_HEADERS)
+        if close_conn:
+            headers["Connection"] = "close"
         return httpx.Client(
-            headers=DEFAULT_HEADERS,
+            headers=headers,
             timeout=httpx.Timeout(self.timeout_sec),
             follow_redirects=True,
             verify=self.verify_ssl,
         )
+
+    def _fetch_via_urllib(self, url: str) -> FetchResult | None:
+        req_headers = dict(DEFAULT_HEADERS)
+        req_headers["Accept-Encoding"] = "gzip, identity"
+        req = urllib.request.Request(url, headers=req_headers, method="GET")
+        ctx = ssl.create_default_context() if self.verify_ssl else ssl._create_unverified_context()
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_sec, context=ctx) as resp:
+                raw = resp.read()
+                if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                    raw = gzip.decompress(raw)
+                ct = (resp.headers.get("Content-Type") or "").lower()
+                charset = resp.headers.get_content_charset()
+                text = decode_response_text(raw, ct, charset)
+                status = int(getattr(resp, "status", 200) or 200)
+                ok = 200 <= status < 400
+                return FetchResult(
+                    url=url,
+                    final_url=resp.geturl() or url,
+                    status_code=status,
+                    content_type=ct,
+                    text=text,
+                    ok=ok,
+                    error="" if ok else f"HTTP {status}",
+                )
+        except urllib.error.HTTPError as exc:
+            return FetchResult(
+                url=url,
+                final_url=url,
+                status_code=int(exc.code),
+                content_type="",
+                text="",
+                ok=False,
+                error=f"HTTP {exc.code}",
+            )
+        except Exception:
+            return None
 
     def fetch(self, url: str, retries: int = 2) -> FetchResult:
         last_err = ""
@@ -98,7 +158,7 @@ class HttpFetcher:
                 if self._external_client is not None:
                     resp = self._external_client.get(url, headers=DEFAULT_HEADERS, follow_redirects=True)
                 else:
-                    with self._build_client() as client:
+                    with self._build_client(close_conn=(attempt > 0)) as client:
                         resp = client.get(url)
 
                 ct = (resp.headers.get("content-type") or "").lower()
@@ -119,6 +179,13 @@ class HttpFetcher:
                 if attempt < retries:
                     time.sleep(0.4 * (attempt + 1))
 
+        if self._external_client is None:
+            fallback = self._fetch_via_urllib(url)
+            if fallback is not None and fallback.ok:
+                return fallback
+            if fallback is not None and fallback.error and not last_err:
+                last_err = fallback.error
+
         return FetchResult(
             url=url,
             final_url=url,
@@ -126,7 +193,7 @@ class HttpFetcher:
             content_type="",
             text="",
             ok=False,
-            error=last_err or "Ismeretlen hálózati hiba",
+            error=format_fetch_error(last_err),
         )
 
 
@@ -321,17 +388,8 @@ def extract_json_candidates(json_text: str, base_url: str) -> list[RawCandidate]
     return candidates
 
 
-BOILERPLATE_RE = re.compile(
-    r"Felhívjuk szíves figyelmét,\s*hogy ha a NAV következő oldalain.*?nem mentesít\.?",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
 def strip_boilerplate(text: str) -> str:
-    if not text:
-        return ""
-    cleaned = BOILERPLATE_RE.sub("", text)
-    return normalize_whitespace(cleaned)
+    return strip_nav_boilerplate(text)
 
 
 def extract_html_candidates(

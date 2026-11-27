@@ -21,10 +21,15 @@ class ParlamentAdapter(BaseSourceAdapter):
         cands = parse_generic_response(res, out)
         # Speciális parlament.hu táblázatos vagy iromány-kártyás finomítás
         soup = BeautifulSoup(res.text, "lxml")
+        for tag_name in ("script", "style", "noscript", "svg", "nav", "header", "footer"):
+            for tag in soup.find_all(tag_name):
+                tag.decompose()
         extra: list[RawCandidate] = []
 
         for link in soup.find_all("a", href=True):
-            href = link["href"]
+            href = (link["href"] or "").strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:")):
+                continue
             txt = normalize_whitespace(link.get_text(" ", strip=True))
             if not txt:
                 continue
@@ -36,8 +41,10 @@ class ParlamentAdapter(BaseSourceAdapter):
             if not (is_iromany_link or bill_match):
                 continue
 
-            parent = link.find_parent(["tr", "li", "div", "p"])
+            parent = link.find_parent(["tr", "li", "article", "div", "p"])
             context = normalize_whitespace(parent.get_text(" ", strip=True)) if parent else txt
+            if len(context) > 1500:
+                context = txt
             title = txt
             doc_ref = bill_match.group(1).upper() if bill_match else ""
             if len(title) < 16 and len(context) > len(title):

@@ -5,16 +5,74 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .classifier import TaxClassifier
+from .classifier import (
+    TaxClassifier,
+    compute_effective_status,
+    normalize_whitespace,
+    strip_accents,
+    strip_nav_boilerplate,
+)
 from .models import LegislativeItem, ScanSummary
+
+
+def _hu_fold(text: str) -> str:
+    return strip_accents(text or "").casefold()
+
+
+def _hu_compact(text: str) -> str:
+    return re.sub(r"[\s\-_/.,]+", "", _hu_fold(text))
+
+
+def _hu_contains(haystack: str | None, needle: str | None) -> int:
+    """Ékezet-, kis/nagybetű- és kötőjel-toleráns magyar keresés SQLite lekérdezésekhez."""
+    if not needle:
+        return 1
+    if not haystack:
+        return 0
+    h_fold = _hu_fold(haystack)
+    h_compact = _hu_compact(haystack)
+    tokens = [t for t in _hu_fold(needle).split() if t]
+    if not tokens:
+        return 1
+    for tok in tokens:
+        tok_compact = _hu_compact(tok)
+        if tok not in h_fold and (not tok_compact or tok_compact not in h_compact):
+            return 0
+    return 1
+
+
+def _compute_summary_diff(old_summary: str, new_summary: str, max_items: int = 3) -> list[str]:
+    """Kinyeri a két szövegváltozat közötti újonnan megjelent vagy módosult részeket."""
+    old_clean = strip_nav_boilerplate(old_summary)
+    new_clean = strip_nav_boilerplate(new_summary)
+    if not new_clean or old_clean == new_clean:
+        return []
+
+    def split_clauses(txt: str) -> list[str]:
+        parts = re.split(
+            r"[\n|•;]+|(?<![0-9])(?<!\bévi)(?<!\btv)(?<!\bsz)(?<!\bkorm)(?<!\brend)\.\s+",
+            txt,
+            flags=re.IGNORECASE,
+        )
+        return [normalize_whitespace(p).strip(" -–:|•") for p in parts if len(normalize_whitespace(p)) >= 12]
+
+    old_set = {c.lower() for c in split_clauses(old_clean)}
+    diffs: list[str] = []
+    for clause in split_clauses(new_clean):
+        if clause.lower() not in old_set:
+            diffs.append(f"Új / módosult szövegrész: {clause[:220]}")
+            if len(diffs) >= max_items:
+                break
+    return diffs
 
 
 def utc_now_iso() -> str:
@@ -66,6 +124,7 @@ class Database:
     def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.create_function("HU_CONTAINS", 2, _hu_contains)
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
         try:
@@ -89,6 +148,9 @@ class Database:
                     published_at TEXT NOT NULL DEFAULT '',
                     document_ref TEXT NOT NULL DEFAULT '',
                     status_label TEXT NOT NULL DEFAULT '',
+                    effective_date TEXT NOT NULL DEFAULT '',
+                    effective_status TEXT NOT NULL DEFAULT '',
+                    change_summary_json TEXT NOT NULL DEFAULT '[]',
                     relevance_score INTEGER NOT NULL DEFAULT 0,
                     is_bill INTEGER NOT NULL DEFAULT 0,
                     categories_json TEXT NOT NULL DEFAULT '[]',
@@ -161,6 +223,20 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_comments_item ON item_comments(item_key, id ASC);
                 """
             )
+            # Biztonságos additív sémamigráció meglévő adatbázisokhoz (adatvesztés nélkül)
+            cols = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(items)").fetchall()
+            }
+            for col_name, col_def in (
+                ("effective_date", "TEXT NOT NULL DEFAULT ''"),
+                ("effective_status", "TEXT NOT NULL DEFAULT ''"),
+                ("change_summary_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ):
+                if col_name not in cols:
+                    conn.execute(f"ALTER TABLE items ADD COLUMN {col_name} {col_def}")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_items_eff_status ON items(effective_status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_items_eff_date ON items(effective_date)")
 
     # ---------------- Felhasználók ----------------
 
@@ -299,8 +375,13 @@ class Database:
 
         with self._lock, self._connect() as conn:
             for item in items:
+                item.summary = strip_nav_boilerplate(item.summary)
                 existing = conn.execute(
-                    "SELECT content_hash, first_seen_at, is_read, is_bookmarked, notes FROM items WHERE item_key = ?",
+                    """
+                    SELECT content_hash, first_seen_at, is_read, is_bookmarked, notes,
+                           summary, effective_date, effective_status, change_summary_json
+                    FROM items WHERE item_key = ?
+                    """,
                     (item.item_key,),
                 ).fetchone()
 
@@ -314,11 +395,12 @@ class Database:
                         """
                         INSERT INTO items (
                             item_key, title, url, source_id, source_name, jurisdiction,
-                            summary, published_at, document_ref, status_label, relevance_score,
-                            is_bill, categories_json, category_names_json, matched_keywords_json,
-                            content_hash, first_seen_at, last_seen_at,
+                            summary, published_at, document_ref, status_label,
+                            effective_date, effective_status, change_summary_json,
+                            relevance_score, is_bill, categories_json, category_names_json,
+                            matched_keywords_json, content_hash, first_seen_at, last_seen_at,
                             is_new, is_updated, is_read, is_bookmarked, notes, raw_metadata_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 0, '', ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 0, '', ?)
                         """,
                         (
                             item.item_key,
@@ -331,6 +413,9 @@ class Database:
                             item.published_at,
                             item.document_ref,
                             item.status_label,
+                            item.effective_date,
+                            item.effective_status,
+                            json.dumps(item.change_summary, ensure_ascii=False),
                             item.relevance_score,
                             1 if item.is_bill else 0,
                             json.dumps(item.categories, ensure_ascii=False),
@@ -344,13 +429,32 @@ class Database:
                     )
                 else:
                     changed = existing["content_hash"] != item.content_hash
-                    if changed:
+                    old_eff_status = existing["effective_status"] or ""
+                    eff_date = item.effective_date or (existing["effective_date"] or "")
+                    eff_status = item.effective_status or compute_effective_status(eff_date)
+                    became_in_force = old_eff_status == "upcoming" and eff_status == "in_force"
+
+                    existing_changes = json.loads(existing["change_summary_json"] or "[]")
+                    diff_notes = _compute_summary_diff(existing["summary"], item.summary) if changed else []
+                    merged_changes: list[str] = []
+                    for c in (diff_notes + list(item.change_summary) + (existing_changes if not changed else [])):
+                        if c and c not in merged_changes:
+                            merged_changes.append(c)
+                    merged_changes = merged_changes[:6]
+                    if became_in_force and not any("Hatályba lépett" in c for c in merged_changes):
+                        merged_changes.insert(0, f"Hatályba lépett ({eff_date})")
+
+                    if changed or became_in_force:
                         updated_count += 1
+
+                    item.effective_date = eff_date
+                    item.effective_status = eff_status
+                    item.change_summary = merged_changes
                     item.first_seen_at = existing["first_seen_at"]
                     item.last_seen_at = now
                     item.is_new = False
-                    item.is_updated = changed
-                    item.is_read = False if changed else bool(existing["is_read"])
+                    item.is_updated = changed or became_in_force
+                    item.is_read = False if (changed or became_in_force) else bool(existing["is_read"])
                     item.is_bookmarked = bool(existing["is_bookmarked"])
                     item.notes = existing["notes"]
 
@@ -365,6 +469,9 @@ class Database:
                             published_at = ?,
                             document_ref = ?,
                             status_label = ?,
+                            effective_date = ?,
+                            effective_status = ?,
+                            change_summary_json = ?,
                             relevance_score = ?,
                             is_bill = ?,
                             categories_json = ?,
@@ -387,6 +494,9 @@ class Database:
                             item.published_at,
                             item.document_ref,
                             item.status_label,
+                            item.effective_date,
+                            item.effective_status,
+                            json.dumps(item.change_summary, ensure_ascii=False),
                             item.relevance_score,
                             1 if item.is_bill else 0,
                             json.dumps(item.categories, ensure_ascii=False),
@@ -394,18 +504,69 @@ class Database:
                             json.dumps(item.matched_keywords, ensure_ascii=False),
                             item.content_hash,
                             now,
-                            1 if changed else 0,
-                            0 if changed else int(existing["is_read"]),
+                            1 if item.is_updated else 0,
+                            0 if item.is_updated else int(existing["is_read"]),
                             json.dumps(item.raw_metadata, ensure_ascii=False),
                             item.item_key,
                         ),
                     )
-                    if changed:
+                    if item.is_updated:
                         conn.execute(
                             "UPDATE user_item_states SET is_read = 0, updated_at = ? WHERE item_key = ?",
                             (now, item.item_key),
                         )
         return new_count, updated_count
+
+    def sync_effective_transitions(self, today: date | None = None) -> int:
+        """Frissíti a hatálybalépési állapotokat: ha eljött a hatálybalépés napja, 'in_force' + FRISSÜLT jelzést ad."""
+        ref_today = today or date.today()
+        now = utc_now_iso()
+        promoted = 0
+
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT item_key, effective_date, effective_status, change_summary_json
+                FROM items
+                WHERE effective_date != ''
+                """
+            ).fetchall()
+
+            for row in rows:
+                eff_date = row["effective_date"]
+                old_status = row["effective_status"] or ""
+                new_status = compute_effective_status(eff_date, today=ref_today)
+                if old_status == new_status:
+                    continue
+
+                changes = json.loads(row["change_summary_json"] or "[]")
+                if old_status == "upcoming" and new_status == "in_force":
+                    promoted += 1
+                    note = f"Hatályba lépett ({eff_date})"
+                    if note not in changes:
+                        changes.insert(0, note)
+                    conn.execute(
+                        """
+                        UPDATE items SET
+                            effective_status = ?,
+                            change_summary_json = ?,
+                            is_updated = 1,
+                            is_read = 0,
+                            last_seen_at = ?
+                        WHERE item_key = ?
+                        """,
+                        (new_status, json.dumps(changes[:6], ensure_ascii=False), now, row["item_key"]),
+                    )
+                    conn.execute(
+                        "UPDATE user_item_states SET is_read = 0, updated_at = ? WHERE item_key = ?",
+                        (now, row["item_key"]),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE items SET effective_status = ? WHERE item_key = ?",
+                        (new_status, row["item_key"]),
+                    )
+        return promoted
 
     def save_scan_run(self, summary: ScanSummary) -> int:
         with self._lock, self._connect() as conn:
@@ -550,6 +711,7 @@ class Database:
         only_read: bool = False,
         only_bills: bool = False,
         only_bookmarked: bool = False,
+        only_effective_changes: bool = False,
         sort_by: str = "relevance",
         limit: int = 500,
         user_id: int | None = None,
@@ -592,23 +754,34 @@ class Database:
             clauses.append("items.is_bill = 1")
         if only_bookmarked:
             clauses.append(f"{bm_expr} = 1")
+        if only_effective_changes:
+            clauses.append("items.effective_status IN ('upcoming', 'in_force')")
         if category:
             clauses.append("items.categories_json LIKE ?")
             params.append(f'%"{category}"%')
-        if search:
-            like = f"%{search.strip()}%"
+        if search and search.strip():
+            q = search.strip()
             clauses.append(
-                "(items.title LIKE ? OR items.summary LIKE ? OR items.document_ref LIKE ? "
-                "OR items.matched_keywords_json LIKE ? OR items.notes LIKE ? "
-                "OR EXISTS (SELECT 1 FROM item_comments ic WHERE ic.item_key = items.item_key AND ic.body LIKE ?))"
+                "(HU_CONTAINS(items.title || ' ' || items.summary || ' ' || items.document_ref "
+                "|| ' ' || items.source_name || ' ' || items.matched_keywords_json "
+                "|| ' ' || items.category_names_json || ' ' || items.change_summary_json "
+                "|| ' ' || items.notes, ?) "
+                "OR EXISTS (SELECT 1 FROM item_comments ic WHERE ic.item_key = items.item_key AND HU_CONTAINS(ic.body, ?)))"
             )
-            params.extend([like, like, like, like, like, like])
+            params.extend([q, q])
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         if sort_by == "newest":
             order = f"ORDER BY {new_expr} DESC, {upd_expr} DESC, items.first_seen_at DESC, items.relevance_score DESC"
         elif sort_by == "published":
             order = "ORDER BY items.published_at DESC, items.relevance_score DESC, items.first_seen_at DESC"
+        elif sort_by == "effective_date":
+            order = (
+                "ORDER BY CASE WHEN items.effective_status = 'upcoming' THEN 0 "
+                "WHEN items.effective_status = 'in_force' THEN 1 ELSE 2 END ASC, "
+                "CASE WHEN items.effective_date = '' THEN '9999-12-31' ELSE items.effective_date END ASC, "
+                "items.relevance_score DESC"
+            )
         else:
             order = (
                 f"ORDER BY {bm_expr} DESC, {new_expr} DESC, {upd_expr} DESC, "
@@ -644,6 +817,12 @@ class Database:
             eff_new = bool(row["is_new"])
             eff_updated = bool(row["is_updated"])
 
+        eff_date = row["effective_date"] if "effective_date" in row.keys() else ""
+        eff_status = row["effective_status"] if "effective_status" in row.keys() else ""
+        if eff_date and not eff_status:
+            eff_status = compute_effective_status(eff_date)
+        raw_changes = row["change_summary_json"] if "change_summary_json" in row.keys() else "[]"
+
         return LegislativeItem(
             item_key=row["item_key"],
             title=row["title"],
@@ -651,10 +830,13 @@ class Database:
             source_id=row["source_id"],
             source_name=row["source_name"],
             jurisdiction=row["jurisdiction"],
-            summary=row["summary"],
+            summary=strip_nav_boilerplate(row["summary"]),
             published_at=row["published_at"],
             document_ref=row["document_ref"],
             status_label=row["status_label"],
+            effective_date=eff_date,
+            effective_status=eff_status,
+            change_summary=json.loads(raw_changes or "[]"),
             relevance_score=int(row["relevance_score"]),
             is_bill=bool(row["is_bill"]),
             categories=json.loads(row["categories_json"] or "[]"),
@@ -778,6 +960,7 @@ class Database:
                 """
                 SELECT item_key, title, url, source_id, source_name, jurisdiction,
                        summary, document_ref, relevance_score, is_bill,
+                       effective_date, effective_status, change_summary_json,
                        categories_json, category_names_json, matched_keywords_json
                 FROM items
                 """
@@ -787,12 +970,14 @@ class Database:
                 old_cats = json.loads(row["categories_json"] or "[]")
                 old_cat_names = json.loads(row["category_names_json"] or "[]")
                 old_kws = json.loads(row["matched_keywords_json"] or "[]")
+                old_summary = row["summary"] or ""
+                clean_summary = strip_nav_boilerplate(old_summary)
                 always_tax = bool(
                     tax_ctx.get(row["source_id"], "NAV / adóhatósági tájékoztató" in old_kws)
                 )
                 res = classifier.classify(
                     title=row["title"],
-                    summary=row["summary"],
+                    summary=clean_summary,
                     url=row["url"],
                     jurisdiction=row["jurisdiction"],
                     always_include_tax_context=always_tax,
@@ -815,6 +1000,17 @@ class Database:
                     new_bill = int(row["is_bill"])
                     new_doc_ref = row["document_ref"]
 
+                old_eff_date = row["effective_date"] or ""
+                new_eff_date = res.effective_date or old_eff_date
+                old_eff_status = row["effective_status"] or ""
+                new_eff_status = res.effective_status or compute_effective_status(new_eff_date)
+                old_changes = json.loads(row["change_summary_json"] or "[]")
+                merged_changes: list[str] = []
+                for c in (old_changes + res.change_summary):
+                    if c and c not in merged_changes:
+                        merged_changes.append(c)
+                merged_changes = merged_changes[:6]
+
                 if "egyeni" in new_cats:
                     custom_matched += 1
 
@@ -828,11 +1024,19 @@ class Database:
                     or new_bill != int(row["is_bill"])
                     or new_doc_ref != row["document_ref"]
                     or new_source_name != row["source_name"]
+                    or clean_summary != old_summary
+                    or new_eff_date != old_eff_date
+                    or new_eff_status != old_eff_status
+                    or merged_changes != old_changes
                 ):
                     conn.execute(
                         """
                         UPDATE items SET
                             source_name = ?,
+                            summary = ?,
+                            effective_date = ?,
+                            effective_status = ?,
+                            change_summary_json = ?,
                             categories_json = ?,
                             category_names_json = ?,
                             matched_keywords_json = ?,
@@ -843,6 +1047,10 @@ class Database:
                         """,
                         (
                             new_source_name,
+                            clean_summary,
+                            new_eff_date,
+                            new_eff_status,
+                            json.dumps(merged_changes, ensure_ascii=False),
                             json.dumps(new_cats, ensure_ascii=False),
                             json.dumps(new_cat_names, ensure_ascii=False),
                             json.dumps(new_kws, ensure_ascii=False),
@@ -866,7 +1074,8 @@ class Database:
                 rows = conn.execute(
                     """
                     SELECT items.jurisdiction, items.source_id, items.is_bill,
-                           items.is_new, items.is_updated, items.categories_json, items.notes,
+                           items.is_new, items.is_updated, items.effective_status,
+                           items.categories_json, items.notes,
                            COALESCE(uis.is_read, 0) AS eff_read,
                            COALESCE(uis.is_bookmarked, 0) AS eff_bookmarked
                     FROM items
@@ -878,7 +1087,8 @@ class Database:
             else:
                 rows = conn.execute(
                     """
-                    SELECT jurisdiction, source_id, is_bill, is_new, is_updated, categories_json, notes,
+                    SELECT jurisdiction, source_id, is_bill, is_new, is_updated,
+                           effective_status, categories_json, notes,
                            is_read AS eff_read, is_bookmarked AS eff_bookmarked
                     FROM items
                     """
@@ -892,6 +1102,8 @@ class Database:
         bookmarked_count = sum(1 for r in rows if r["eff_bookmarked"])
         noted_count = sum(1 for r in rows if (r["notes"] or "").strip())
         bills_count = sum(1 for r in rows if r["is_bill"])
+        upcoming_changes_count = sum(1 for r in rows if r["effective_status"] == "upcoming")
+        in_force_changes_count = sum(1 for r in rows if r["effective_status"] == "in_force")
 
         by_jurisdiction: dict[str, int] = {"HU": 0, "EU": 0}
         by_category: dict[str, int] = {}
@@ -913,6 +1125,9 @@ class Database:
             "bookmarked_count": bookmarked_count,
             "noted_count": noted_count,
             "bills_count": bills_count,
+            "upcoming_changes_count": upcoming_changes_count,
+            "in_force_changes_count": in_force_changes_count,
+            "effective_changes_count": upcoming_changes_count + in_force_changes_count,
             "by_jurisdiction": by_jurisdiction,
             "by_category": by_category,
             "by_source": by_source,

@@ -52,6 +52,9 @@ class LegislativeItem:
     is_bookmarked: bool = False
     notes: str = ""
     comments: list[dict[str, Any]] = field(default_factory=list)
+    effective_date: str = ""  # ISO YYYY-MM-DD (pl. "2027-01-01")
+    effective_status: str = ""  # "" | "upcoming" | "in_force"
+    change_summary: list[str] = field(default_factory=list)
     raw_metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -80,6 +83,9 @@ class LegislativeItem:
             "is_bookmarked": self.is_bookmarked,
             "notes": self.notes,
             "comments": self.comments,
+            "effective_date": self.effective_date,
+            "effective_status": self.effective_status,
+            "change_summary": self.change_summary,
             "raw_metadata": self.raw_metadata,
         }
 
@@ -142,6 +148,8 @@ class RawCandidate:
     published_at: str = ""
     document_ref: str = ""
     status_label: str = ""
+    effective_date: str = ""
+    change_summary: list[str] = field(default_factory=list)
     raw_metadata: dict[str, Any] = field(default_factory=dict)
 
 
