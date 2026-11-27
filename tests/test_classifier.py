@@ -131,3 +131,36 @@ def test_custom_keywords_hungarian_suffixes_and_accent_fallback():
     assert "egyeni" in [m.category_id for m in res_stem.category_matches]
     assert "számla" in res_stem.matched_keywords
 
+
+def test_effective_date_change_summary_and_nav_boilerplate_cleanup():
+    from datetime import date
+
+    from ado_agent.classifier import compute_effective_status, extract_effective_date, strip_nav_boilerplate
+
+    raw_nav = (
+        "Felhívjuk szíves figyelmét, hogy ha a NAV következő oldalain 2018. január 1-je után közzétett "
+        "tájékoztatóknak megfelelően jár el, akkor az adózás rendjéről szóló 2017. évi CL. törvény "
+        "247. §-a alapján jogkövetkezmény az Ön részére nem állapítható meg. "
+        "2027. január 1-jétől hatályos az ÁFA tv. 82. § módosítása, amely a kedvezményes kulcsot érinti."
+    )
+    cleaned = strip_nav_boilerplate(raw_nav)
+    assert "2017. évi CL." not in cleaned
+    assert "2027. január 1-jétől" in cleaned
+
+    eff = extract_effective_date("Áfa tv. módosítás", cleaned)
+    assert eff == "2027-01-01"
+    assert compute_effective_status(eff, today=date(2026, 11, 26)) == "upcoming"
+    assert compute_effective_status(eff, today=date(2027, 1, 1)) == "in_force"
+    assert compute_effective_status("2025-01-01", today=date(2026, 11, 26)) == ""
+
+    clf = TaxClassifier()
+    res = clf.classify(
+        title="2007. évi CXXVII. törvény az általános forgalmi adóról (Áfa tv.)",
+        summary="Módosítja a 2026. évi LXXV. törvény. 2027. január 1-jétől hatályos a nyugtaadatszolgáltatás bővítése.",
+        today=date(2026, 11, 26),
+    )
+    assert res.effective_date == "2027-01-01"
+    assert res.effective_status == "upcoming"
+    assert len(res.change_summary) >= 1
+    assert any("2026. évi LXXV. törvény" in c or "2027." in c for c in res.change_summary)
+

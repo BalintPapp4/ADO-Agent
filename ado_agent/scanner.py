@@ -85,11 +85,11 @@ class TaxScanner:
             if out.ok_requests == 0 and out.errors:
                 status = "error"
                 msg = "; ".join(out.errors[:3])
-            elif out.warnings:
+            elif len(out.candidates) == 0 and out.warnings:
                 status = "warning"
                 parts = list(out.warnings[:2]) + list(out.errors[:2])
                 msg = " | ".join(parts)
-            elif out.errors and len(out.candidates) == 0:
+            elif len(out.candidates) == 0 and out.errors:
                 status = "warning"
                 msg = " | ".join(out.errors[:3])
             elif len(out.candidates) == 0:
@@ -101,8 +101,13 @@ class TaxScanner:
                     f"{len(out.candidates)} nyers elem feldolgozva, "
                     f"{len(matched)} adózási találat."
                 )
+                notes: list[str] = []
+                if out.warnings:
+                    notes.append(out.warnings[0])
                 if out.errors:
-                    msg += f" ({len(out.errors)} másodlagos URL sikertelen)"
+                    notes.append(f"{len(out.errors)} másodlagos URL sikertelen")
+                if notes:
+                    msg += f" ({'; '.join(notes)})"
 
             res = SourceScanResult(
                 source_id=src.id,
@@ -173,6 +178,8 @@ class TaxScanner:
             source_tax_context={s.id: s.always_include_tax_context for s in self.config.sources},
             source_names={s.id: s.name for s in self.config.sources},
         )
+        promoted = self.db.sync_effective_transitions()
+        total_updated += promoted
 
         succeeded = sum(1 for r in source_results if r.status == "ok")
         warnings = sum(1 for r in source_results if r.status == "warning")

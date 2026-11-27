@@ -82,7 +82,7 @@
       <div class="kpi-card kpi-highlight-red">
         <div class="kpi-label">Törvényjavaslatok / Tervezetek</div>
         <div class="kpi-value" id="kpi-bills">0</div>
-        <div class="kpi-sub">T/ irományok, COM javaslatok, tervezetek</div>
+        <div class="kpi-sub" id="kpi-effective-sub">Hatálybalépő változások: 0</div>
       </div>
       <div class="kpi-card kpi-highlight-amber">
         <div class="kpi-label">Kiemelt (Könyvjelzős)</div>
@@ -119,6 +119,7 @@
 
         <select id="filter-sort" aria-label="Rendezés">
           <option value="relevance">Rendezés: Relevancia &amp; Újdonság</option>
+          <option value="effective_date">Rendezés: Hatálybalépés szerint</option>
           <option value="newest">Rendezés: Legfrissebb észlelés</option>
           <option value="published">Rendezés: Közzététel dátuma</option>
         </select>
@@ -129,6 +130,9 @@
       <div class="toggles-row">
         <label class="toggle-chip">
           <input type="checkbox" id="filter-only-new"> Csak újak / frissültek
+        </label>
+        <label class="toggle-chip toggle-chip-eff">
+          <input type="checkbox" id="filter-only-effective"> Csak hatálybalépő változások (<span id="eff-count-badge">0</span>)
         </label>
         <label class="toggle-chip">
           <input type="checkbox" id="filter-only-bills"> Csak törvényjavaslatok / tervezetek

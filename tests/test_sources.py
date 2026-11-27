@@ -120,7 +120,7 @@ def _mock_handler(request: httpx.Request) -> httpx.Response:
         if "docid=" in url:
             return httpx.Response(200, text=MOCK_NETJOGTAR_LAW_HTML, headers={"content-type": "text/html; charset=utf-8"})
         return httpx.Response(200, text="<html><body><a href='/hirek/1'>ÁFA tv. frissítés 2026</a></body></html>", headers={"content-type": "text/html"})
-    if "njt.hu" in url:
+    if "njt.jog.gov.hu" in url or "njt.hu" in url:
         return httpx.Response(200, text=MOCK_NJT_SPA_HTML, headers={"content-type": "text/html; charset=utf-8"})
     if "nav.gov.hu" in url:
         return httpx.Response(200, text=MOCK_NAV_RSS, headers={"content-type": "application/rss+xml; charset=utf-8"})
@@ -214,3 +214,97 @@ def test_nav_boilerplate_and_megamenu_not_attached_to_links():
     discl = [c for c in cands if "Ügyféliránytű részletek" in c.title]
     if discl:
         assert "2017. évi CL." not in discl[0].summary
+
+
+def test_njt_mirror_fallback_and_netjogtar_2027_effective_date(tmp_path: Path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "njt.jog.gov.hu" in url:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        if "njt.hu" in url:
+            return httpx.Response(200, text=MOCK_NJT_SPA_HTML, headers={"content-type": "text/html; charset=utf-8"})
+        if "net.jogtar.hu" in url and "docid=a0700127" in url:
+            html = """
+            <html><head><title>2007. évi CXXVII. törvény - Netjogtár</title></head><body>
+              <h1>2007. évi CXXVII. törvény az általános forgalmi adóról (Áfa tv.)</h1>
+              <div class="timeline">
+                <span>Időállapot: 2027.01.01-től hatályos szöveg</span>
+                <p>Módosítja a 2026. évi LXXV. törvény: az e-nyugta adatszolgáltatási szabályai és az áfa-visszaigénylés határideje 2027. január 1-jétől módosul.</p>
+              </div>
+            </body></html>
+            """
+            return httpx.Response(200, text=html, headers={"content-type": "text/html; charset=utf-8"})
+        return httpx.Response(404, text="Not found")
+
+    cfg = AppConfig(
+        data_dir=tmp_path,
+        sources=[s for s in get_default_sources() if s.id in ("njt_hu", "net_jogtar_hu")],
+    )
+    db = Database(cfg.db_path)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    scanner = TaxScanner(cfg, db, fetcher=HttpFetcher(client=client))
+
+    summary = scanner.run_scan()
+    assert summary.failed_sources == 0
+
+    items = db.query_items()
+    njt_items = [i for i in items if i.source_id == "njt_hu"]
+    assert len(njt_items) >= 1
+    assert any("Áfa tv." in i.title for i in njt_items)
+
+    afa_net = [i for i in items if i.source_id == "net_jogtar_hu" and "CXXVII" in i.title]
+    assert len(afa_net) == 1
+    assert afa_net[0].effective_date == "2027-01-01"
+    assert afa_net[0].effective_status == "upcoming"
+    assert len(afa_net[0].change_summary) >= 1
+
+
+def test_app_config_migrates_legacy_njt_and_preserves_custom_sources(tmp_path: Path):
+    import json
+
+    cfg_path = tmp_path / "config.json"
+    legacy_payload = {
+        "custom_keywords": ["gépjárműadó"],
+        "sources": [
+            {
+                "id": "njt_hu",
+                "name": "Nemzeti Jogszabálytár (njt.hu)",
+                "adapter": "njt",
+                "url": "https://njt.hu/",
+                "extra_urls": ["https://njt.hu/jogszabaly/2007-127-00-00"],
+                "jurisdiction": "HU",
+                "enabled": False,
+                "is_builtin": True,
+            },
+            {
+                "id": "parlament_hu",
+                "name": "Országgyűlés (parlament.hu)",
+                "adapter": "parlament",
+                "url": "https://parlament.hu/iromanyok",
+                "extra_urls": [],
+                "jurisdiction": "HU",
+                "enabled": True,
+                "is_builtin": True,
+            },
+            {
+                "id": "custom_nav_test",
+                "name": "Saját adóblog",
+                "adapter": "web",
+                "url": "https://example.com/ado",
+                "jurisdiction": "HU",
+                "enabled": True,
+                "is_builtin": False,
+            },
+        ],
+    }
+    cfg_path.write_text(json.dumps(legacy_payload, ensure_ascii=False), encoding="utf-8")
+
+    loaded = AppConfig.load(data_dir=tmp_path)
+    by_id = {s.id: s for s in loaded.sources}
+    assert by_id["njt_hu"].url == "https://njt.jog.gov.hu/"
+    assert by_id["njt_hu"].enabled is False  # Felhasználói kapcsoló megőrizve!
+    assert "https://njt.hu/" in by_id["njt_hu"].extra_urls
+    assert by_id["parlament_hu"].url == "https://www.parlament.hu/iromanyok-lekerdezese"
+    assert "https://www.parlament.hu/" in by_id["parlament_hu"].extra_urls
+    assert "custom_nav_test" in by_id
+    assert loaded.custom_keywords == ["gépjárműadó"]

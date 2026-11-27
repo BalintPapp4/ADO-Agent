@@ -173,16 +173,16 @@ def create_app(
     if auth_enabled:
         db.ensure_users_from_env(os.environ.get("ADO_USERS", ""))
 
-    # Induláskor a meglévő DB elemek szinkronizálása az elmentett egyéni kulcsszavakkal / forrásnevekkel
-    if config.custom_keywords:
-        try:
-            db.reclassify_items(
-                TaxClassifier(custom_keywords=config.custom_keywords),
-                source_tax_context={s.id: s.always_include_tax_context for s in config.sources},
-                source_names={s.id: s.name for s in config.sources},
-            )
-        except Exception:
-            logger.exception("Hiba a tárolt elemek induláskori újracímkézésekor")
+    # Induláskor a meglévő DB elemek szinkronizálása (forrásnevek, egyéni kulcsszavak, NAV-tisztítás, hatálybalépések)
+    try:
+        db.reclassify_items(
+            TaxClassifier(custom_keywords=config.custom_keywords),
+            source_tax_context={s.id: s.always_include_tax_context for s in config.sources},
+            source_names={s.id: s.name for s in config.sources},
+        )
+        db.sync_effective_transitions()
+    except Exception:
+        logger.exception("Hiba a tárolt elemek induláskori szinkronizálásakor")
 
     web_mode = auth_enabled or os.environ.get("ADO_WEB_MODE", "").strip().lower() in ("1", "true", "yes")
     coordinator = ScanCoordinator(config, db)
@@ -323,6 +323,8 @@ def create_app(
         user = get_current_user()
         uid = user["id"] if user else None
 
+        db.sync_effective_transitions()
+
         jurisdiction = request.args.get("jurisdiction", "")
         category = request.args.get("category", "")
         source_id = request.args.get("source_id", "")
@@ -332,6 +334,7 @@ def create_app(
         only_read = request.args.get("only_read", "").lower() in ("1", "true", "yes")
         only_bills = request.args.get("only_bills", "").lower() in ("1", "true", "yes")
         only_bookmarked = request.args.get("only_bookmarked", "").lower() in ("1", "true", "yes")
+        only_effective_changes = request.args.get("only_effective_changes", "").lower() in ("1", "true", "yes")
         sort_by = request.args.get("sort_by", "relevance")
 
         items = db.query_items(
@@ -344,6 +347,7 @@ def create_app(
             only_read=only_read,
             only_bills=only_bills,
             only_bookmarked=only_bookmarked,
+            only_effective_changes=only_effective_changes,
             sort_by=sort_by,
             user_id=uid,
         )
@@ -583,6 +587,7 @@ def create_app(
             only_read=request.args.get("only_read", "").lower() in ("1", "true", "yes"),
             only_bills=request.args.get("only_bills", "").lower() in ("1", "true", "yes"),
             only_bookmarked=request.args.get("only_bookmarked", "").lower() in ("1", "true", "yes"),
+            only_effective_changes=request.args.get("only_effective_changes", "").lower() in ("1", "true", "yes"),
             user_id=uid,
         )
         fmt_low = fmt.lower()

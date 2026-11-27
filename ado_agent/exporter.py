@@ -30,6 +30,14 @@ def _format_notes_and_comments(it: LegislativeItem) -> str:
     return "\n".join(parts)
 
 
+def _format_effective_status(it: LegislativeItem) -> str:
+    if it.effective_status == "upcoming":
+        return f"Jövőbeli változás ({it.effective_date})" if it.effective_date else "Jövőbeli változás"
+    if it.effective_status == "in_force":
+        return f"Hatályba lépett ({it.effective_date})" if it.effective_date else "Hatályba lépett"
+    return it.effective_date or ""
+
+
 def export_items_csv(items: list[LegislativeItem]) -> bytes:
     """UTF-8 BOM CSV, amelyet a magyar Excel is ékezethelyesen nyit meg."""
     buf = io.StringIO()
@@ -37,6 +45,7 @@ def export_items_csv(items: list[LegislativeItem]) -> bytes:
     writer.writerow(
         [
             "Állapot",
+            "Hatálybalépés",
             "Joghatóság",
             "Relevancia",
             "Törvényjavaslat",
@@ -45,6 +54,7 @@ def export_items_csv(items: list[LegislativeItem]) -> bytes:
             "Cím",
             "Forrás",
             "Dátum",
+            "Változások / érintett részek",
             "Talált kulcsszavak",
             "Kivonat",
             "Link",
@@ -56,6 +66,7 @@ def export_items_csv(items: list[LegislativeItem]) -> bytes:
         writer.writerow(
             [
                 state,
+                _format_effective_status(it),
                 it.jurisdiction,
                 it.relevance_score,
                 "Igen" if it.is_bill else "Nem",
@@ -64,6 +75,7 @@ def export_items_csv(items: list[LegislativeItem]) -> bytes:
                 it.title,
                 it.source_name,
                 it.published_at,
+                " | ".join(it.change_summary or []),
                 ", ".join(it.matched_keywords),
                 it.summary,
                 it.url,
@@ -104,6 +116,8 @@ def export_items_xlsx(
         "Összefoglaló",
         "Forrás URL",
         "Saját jegyzet",
+        "Hatálybalépés",
+        "Változások / érintett részek",
     ]
     ws.append(headers)
     for col_idx in range(1, len(headers) + 1):
@@ -128,6 +142,8 @@ def export_items_xlsx(
             it.summary,
             it.url,
             _format_notes_and_comments(it),
+            _format_effective_status(it),
+            "\n".join(it.change_summary or []),
         ]
         ws.append(row_values)
         r_idx = ws.max_row
@@ -144,7 +160,7 @@ def export_items_xlsx(
         for c_idx in range(1, len(headers) + 1):
             ws.cell(row=r_idx, column=c_idx).alignment = Alignment(vertical="top", wrap_text=True)
 
-    widths = [12, 12, 10, 16, 18, 32, 48, 28, 16, 30, 52, 38, 26]
+    widths = [12, 12, 10, 16, 18, 32, 48, 28, 16, 30, 52, 38, 26, 22, 44]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
@@ -158,6 +174,8 @@ def export_items_xlsx(
     ws_sum.append(["Összes exportált találat", len(items)])
     ws_sum.append(["Új találatok", sum(1 for x in items if x.is_new)])
     ws_sum.append(["Frissült találatok", sum(1 for x in items if x.is_updated)])
+    ws_sum.append(["Jövőbeli hatálybalépések", sum(1 for x in items if x.effective_status == "upcoming")])
+    ws_sum.append(["Frissen hatályba lépett", sum(1 for x in items if x.effective_status == "in_force")])
     ws_sum.append(["Törvényjavaslatok / tervezetek", sum(1 for x in items if x.is_bill)])
     ws_sum.append(["Magyar (HU) elemek", sum(1 for x in items if x.jurisdiction == "HU")])
     ws_sum.append(["EU elemek", sum(1 for x in items if x.jurisdiction == "EU")])
@@ -215,6 +233,8 @@ def export_items_markdown(items: list[LegislativeItem]) -> bytes:
             badges.append("ÚJ")
         if it.is_updated:
             badges.append("FRISSÜLT")
+        if it.effective_date or it.effective_status:
+            badges.append(_format_effective_status(it))
         if it.is_bill:
             badges.append("Törvényjavaslat")
         if it.document_ref:
@@ -226,6 +246,10 @@ def export_items_markdown(items: list[LegislativeItem]) -> bytes:
             lines.append(f"- **Kategóriák:** {', '.join(it.category_names)}")
         if it.matched_keywords:
             lines.append(f"- **Kulcsszavak:** {', '.join(it.matched_keywords)}")
+        if it.effective_date:
+            lines.append(f"- **Hatálybalépés:** {_format_effective_status(it)}")
+        if it.change_summary:
+            lines.append(f"- **Érintett változások:** {'; '.join(it.change_summary)}")
         if it.published_at:
             lines.append(f"- **Dátum:** {it.published_at}")
         if it.summary:
@@ -242,13 +266,22 @@ def export_items_html(items: list[LegislativeItem]) -> bytes:
             badge = '<span class="badge new">ÚJ</span>'
         elif it.is_updated:
             badge = '<span class="badge upd">FRISSÜLT</span>'
+        eff_badge = ""
+        if it.effective_status == "upcoming":
+            eff_badge = f'<span class="badge eff-upcoming">⚠ Változás ({html.escape(it.effective_date)})</span>'
+        elif it.effective_status == "in_force":
+            eff_badge = f'<span class="badge eff-inforce">⚡ Hatályba lépett ({html.escape(it.effective_date)})</span>'
         bill_badge = '<span class="badge bill">Törvényjavaslat</span>' if it.is_bill else ""
         cats = "".join(f'<span class="cat">{html.escape(c)}</span>' for c in it.category_names)
+        changes_html = ""
+        if it.change_summary:
+            lis = "".join(f"<li>{html.escape(c)}</li>" for c in it.change_summary)
+            changes_html = f'<ul class="changes">{lis}</ul>'
         rows_html.append(
             f"""
             <article class="card">
               <div class="meta">
-                {badge} {bill_badge}
+                {badge} {eff_badge} {bill_badge}
                 <span class="jur">{html.escape(it.jurisdiction)}</span>
                 <span class="src">{html.escape(it.source_name)}</span>
                 <span class="score">Relevancia: {it.relevance_score}</span>
@@ -257,6 +290,7 @@ def export_items_html(items: list[LegislativeItem]) -> bytes:
               </div>
               <h2><a href="{html.escape(it.url)}" target="_blank" rel="noopener">{html.escape(it.title)}</a></h2>
               <div class="cats">{cats}</div>
+              {changes_html}
               {f'<p class="summary">{html.escape(it.summary)}</p>' if it.summary else ''}
               <p class="kws"><strong>Kulcsszavak:</strong> {html.escape(', '.join(it.matched_keywords))}</p>
             </article>
@@ -280,9 +314,12 @@ def export_items_html(items: list[LegislativeItem]) -> bytes:
   .badge {{ padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 0.75rem; }}
   .badge.new {{ background: #dcfce7; color: #166534; }}
   .badge.upd {{ background: #fef3c7; color: #92400e; }}
+  .badge.eff-upcoming {{ background: #ffedd5; color: #9a3412; }}
+  .badge.eff-inforce {{ background: #fef2f2; color: #b91c1c; }}
   .badge.bill {{ background: #fee2e2; color: #991b1b; }}
   .jur {{ background: #e0f2fe; color: #0369a1; padding: 2px 7px; border-radius: 6px; font-weight: 600; }}
   .cat {{ display: inline-block; background: #eef2ff; color: #3730a3; padding: 2px 8px; border-radius: 6px; font-size: 0.78rem; margin: 4px 6px 4px 0; }}
+  .changes {{ margin: 8px 0; padding: 8px 12px 8px 26px; background: #fff7ed; border-left: 3px solid #ea580c; border-radius: 6px; font-size: 0.88rem; color: #7c2d12; }}
   .summary {{ color: #334155; font-size: 0.92rem; line-height: 1.45; }}
   .kws {{ color: #64748b; font-size: 0.82rem; margin-bottom: 0; }}
 </style>

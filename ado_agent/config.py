@@ -40,6 +40,7 @@ def get_default_sources() -> list[SourceConfig]:
             adapter="parlament",
             url="https://www.parlament.hu/iromanyok-lekerdezese",
             extra_urls=[
+                "https://www.parlament.hu/",
                 "https://www.parlament.hu/web/guest/iromanyok-lekerdezese",
                 "https://www.parlament.hu/web/guest/orszaggyulesi-iromanyok",
                 "https://www.parlament.hu/web/guest/hirek",
@@ -89,19 +90,20 @@ def get_default_sources() -> list[SourceConfig]:
         ),
         SourceConfig(
             id="njt_hu",
-            name="Nemzeti Jogszabálytár (njt.hu)",
+            name="Nemzeti Jogszabálytár (njt.jog.gov.hu)",
             adapter="njt",
-            url="https://njt.hu/",
+            url="https://njt.jog.gov.hu/",
             extra_urls=[
-                "https://njt.hu/jogszabaly/2007-127-00-00",
-                "https://njt.hu/jogszabaly/1995-117-00-00",
-                "https://njt.hu/jogszabaly/2008-67-00-00",
-                "https://njt.hu/jogszabaly/1996-81-00-00",
-                "https://njt.hu/jogszabaly/2017-150-00-00",
-                "https://njt.hu/jogszabaly/2022-197-20-22",
+                "https://njt.jog.gov.hu/jogszabaly/2007-127-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/1995-117-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/2008-67-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/1996-81-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/2017-150-00-00",
+                "https://njt.jog.gov.hu/jogszabaly/2022-197-20-22",
+                "https://njt.hu/",
             ],
             jurisdiction="HU",
-            description="A hivatalos Nemzeti Jogszabálytár — adótörvények, módosítások és hatályos szövegek.",
+            description="A hivatalos Nemzeti Jogszabálytár (njt.jog.gov.hu) — adótörvények, módosítások és hatályos szövegek.",
             badge_color="#15803d",
             enabled=True,
             is_builtin=True,
@@ -129,6 +131,7 @@ def get_default_sources() -> list[SourceConfig]:
             adapter="magyarkozlony",
             url="https://magyarkozlony.hu/",
             extra_urls=[
+                "https://www.magyarkozlony.hu/",
                 "https://magyarkozlony.hu/hivatalos-lapok",
             ],
             jurisdiction="HU",
@@ -159,10 +162,10 @@ def get_default_sources() -> list[SourceConfig]:
             id="adozona_hu",
             name="Adózóna (adozona.hu)",
             adapter="web",
-            url="https://adozona.hu/rss",
-            extra_urls=["https://adozona.hu/"],
+            url="https://adozona.hu/",
+            extra_urls=["https://adozona.hu/rss", "https://adozona.hu/rss.xml"],
             jurisdiction="HU",
-            description="Szakmai adózási hírek és jogszabály-értelmezések (opcionálisan bekapcsolható).",
+            description="Szakmai adózási hírek és jogszabály-értelmezések.",
             badge_color="#6d28d9",
             enabled=False,
             is_builtin=True,
@@ -174,7 +177,7 @@ def get_default_sources() -> list[SourceConfig]:
             url="https://ado.hu/feed/",
             extra_urls=["https://ado.hu/"],
             jurisdiction="HU",
-            description="Adózási szakportál friss cikkei és törvényváltozási összefoglalói (opcionálisan bekapcsolható).",
+            description="Adózási szakportál friss cikkei és törvényváltozási összefoglalói.",
             badge_color="#7c3aed",
             enabled=False,
             is_builtin=True,
@@ -235,11 +238,50 @@ class AppConfig:
             try:
                 raw = json.loads(cfg.config_path.read_text(encoding="utf-8"))
                 loaded_sources = [SourceConfig.from_dict(s) for s in raw.get("sources", [])]
-                # Összefésülés: új beépített források hozzáadása ha frissült a verzió
+                # Összefésülés: új beépített források hozzáadása és elavult URL-ek/nevek migrációja
+                defaults_by_id = {s.id: s for s in get_default_sources()}
                 by_id = {s.id: s for s in loaded_sources}
+                migrated = False
+
+                for existing in loaded_sources:
+                    default_src = defaults_by_id.get(existing.id)
+                    if default_src is None or not existing.is_builtin:
+                        continue
+                    if existing.name != default_src.name or existing.description != default_src.description:
+                        existing.name = default_src.name
+                        existing.description = default_src.description
+                        migrated = True
+                    # Elavult beépített elsődleges URL-ek frissítése (felhasználói kapcsolók és egyéni források megőrzésével)
+                    if existing.id == "njt_hu" and "njt.hu" in existing.url and "njt.jog.gov.hu" not in existing.url:
+                        existing.url = default_src.url
+                        existing.extra_urls = list(default_src.extra_urls)
+                        migrated = True
+                    elif existing.id == "adozona_hu" and existing.url.rstrip("/").endswith("/rss"):
+                        existing.url = default_src.url
+                        existing.extra_urls = list(default_src.extra_urls)
+                        migrated = True
+                    elif existing.id == "parlament_hu" and (
+                        "://parlament.hu" in existing.url
+                        or existing.url.rstrip("/") == "https://www.parlament.hu/iromanyok"
+                    ):
+                        existing.url = default_src.url
+                        existing.extra_urls = list(default_src.extra_urls)
+                        migrated = True
+                    elif existing.id == "magyar_kozlony" and "://magyarkozlony.hu" in existing.url:
+                        existing.url = default_src.url
+                        existing.extra_urls = list(default_src.extra_urls)
+                        migrated = True
+                    else:
+                        for extra in default_src.extra_urls:
+                            if extra != existing.url and extra not in existing.extra_urls:
+                                existing.extra_urls.append(extra)
+                                migrated = True
+
                 for default_src in get_default_sources():
                     if default_src.id not in by_id:
                         loaded_sources.append(default_src)
+                        migrated = True
+
                 if loaded_sources:
                     cfg.sources = loaded_sources
                 cfg.custom_keywords = [
@@ -249,6 +291,8 @@ class AppConfig:
                 cfg.max_workers = int(raw.get("max_workers", 5))
                 cfg.auto_scan_interval_minutes = int(raw.get("auto_scan_interval_minutes", 0))
                 cfg.verify_ssl = bool(raw.get("verify_ssl", True))
+                if migrated:
+                    cfg.save()
             except Exception:
                 # Sérült config esetén biztonságos visszaállás alapértelmezettre
                 cfg.save()

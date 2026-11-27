@@ -6,12 +6,16 @@ import re
 
 from bs4 import BeautifulSoup
 
-from ..classifier import normalize_whitespace
+from ..classifier import extract_effective_date, normalize_whitespace
 from ..fetcher import DATE_RE, FetchResult
 from ..models import RawCandidate
 from .base import AdapterOutput, BaseSourceAdapter, parse_generic_response
 
 LAW_HEADER_RE = re.compile(r"\d{4}\.\s*évi\s+[IVXLCDM]+\.\s*törvény|\d+/\d{4}\.\s*\([^)]+\)\s*Korm\.", re.IGNORECASE)
+TEMPORAL_CUE_RE = re.compile(
+    r"(?:hatályos|hatályba|módosít|módosul|beiktat|hatályon kívül|kihirdet|időállapot|változ|202[6-9]\.|203\d\.)",
+    re.IGNORECASE,
+)
 
 
 class NetJogtarAdapter(BaseSourceAdapter):
@@ -32,16 +36,38 @@ class NetJogtarAdapter(BaseSourceAdapter):
         if not title or len(title) < 6:
             return []
 
-        body_text = normalize_whitespace(soup.get_text(" ", strip=True))
-        # Keressük a hatályosságra / módosításra utaló metaadat-részeket az oldal tetején
-        snippet_parts: list[str] = []
-        for el in soup.find_all(["h1", "h2", "p", "div", "span"], limit=60):
-            txt = normalize_whitespace(el.get_text(" ", strip=True))
-            if any(k in txt.lower() for k in ("hatályos", "módosít", "kihirdet", "netjogtár")) and 10 <= len(txt) <= 280:
-                if txt not in snippet_parts:
-                    snippet_parts.append(txt)
-        summary = " | ".join(snippet_parts[:4]) if snippet_parts else body_text[:450]
+        for tag_name in ("script", "style", "noscript", "svg", "nav", "footer"):
+            for tag in soup.find_all(tag_name):
+                tag.decompose()
 
+        body_text = normalize_whitespace(soup.get_text(" ", strip=True))
+        # Keressük a hatályosságra / jövőbeli időállapotra / módosításokra utaló részeket az egész oldalon
+        priority_parts: list[str] = []
+        general_parts: list[str] = []
+        seen_low: set[str] = set()
+
+        for el in soup.find_all(["h1", "h2", "h3", "p", "li", "tr", "option", "a", "div", "span"]):
+            txt = normalize_whitespace(el.get_text(" ", strip=True))
+            if not (10 <= len(txt) <= 260):
+                continue
+            low = txt.lower()
+            if low == title.lower() or low in seen_low:
+                continue
+            if not TEMPORAL_CUE_RE.search(txt):
+                continue
+            seen_low.add(low)
+            # Kiemeljük a konkrét évszámos / módosító törvényes sorokat előre
+            if re.search(r"202[6-9]|203\d|módosít|hatályba|hatályon kívül", txt, re.I):
+                priority_parts.append(txt)
+            else:
+                general_parts.append(txt)
+            if len(priority_parts) >= 8 and len(general_parts) >= 6:
+                break
+
+        snippet_parts = (priority_parts + general_parts)[:6]
+        summary = " | ".join(snippet_parts) if snippet_parts else body_text[:450]
+
+        eff_date = extract_effective_date(title, " | ".join(priority_parts + general_parts))
         dm = DATE_RE.search(summary)
         pub = normalize_whitespace(dm.group(1)) if dm else ""
         doc_match = LAW_HEADER_RE.search(f"{title} {summary}")
@@ -55,5 +81,7 @@ class NetJogtarAdapter(BaseSourceAdapter):
                 published_at=pub,
                 document_ref=doc_ref,
                 status_label="Hatályos törvényszöveg (Netjogtár)",
+                effective_date=eff_date,
+                change_summary=priority_parts[:4],
             )
         ]

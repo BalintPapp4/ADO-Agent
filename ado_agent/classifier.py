@@ -6,6 +6,7 @@ import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from urllib.parse import urlparse
 
 from .models import CategoryMatch, LegislativeItem, RawCandidate, SourceConfig
@@ -358,6 +359,20 @@ DOC_REF_RE = re.compile(
 )
 
 
+NAV_BOILERPLATE_RE = re.compile(
+    r"Felhívjuk szíves figyelmét,\s*hogy ha a NAV következő oldalain.*?nem állapítható meg\.?"
+    r"(?:\s*A fentiek alkalmazása.*?nem mentesít\.?)?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def strip_nav_boilerplate(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = NAV_BOILERPLATE_RE.sub("", text)
+    return normalize_whitespace(cleaned)
+
+
 def strip_accents(text: str) -> str:
     nfkd = unicodedata.normalize("NFKD", text)
     return "".join(ch for ch in nfkd if not unicodedata.combining(ch))
@@ -372,6 +387,212 @@ def extract_document_ref(text: str) -> str:
     if not match:
         return ""
     return normalize_whitespace(match.group(1))
+
+
+_MONTH_MAP: dict[str, int] = {
+    "januar": 1,
+    "january": 1,
+    "februar": 2,
+    "february": 2,
+    "marcius": 3,
+    "march": 3,
+    "aprilis": 4,
+    "april": 4,
+    "majus": 5,
+    "may": 5,
+    "junius": 6,
+    "june": 6,
+    "julius": 7,
+    "july": 7,
+    "augusztus": 8,
+    "august": 8,
+    "szeptember": 9,
+    "september": 9,
+    "oktober": 10,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
+
+_EFFECTIVE_CONTEXT_RE = re.compile(
+    r"(?:hatály\w*|életbe\s*lép\w*|lép\s+életbe|változ\w*|váltani\s+fog|módosul\w*|módosít\w*|"
+    r"bevezet\w*|alkalmazandó|érvényes|időállapot|effective\s+from|shall\s+apply\s+from|"
+    r"enters?\s+into\s+force|entry\s+into\s+force)",
+    re.IGNORECASE,
+)
+
+_LEGISLATIVE_CHANGE_CUE_RE = re.compile(
+    r"(?:törvény\w*|\btv\.?\b|módosít\w*|módosul\w*|változ\w*|hatály\w*|javaslat\w*|tervezet\w*|"
+    r"rendelet\w*|irányelv\w*|directive|regulation|proposal|emelked\w*|csökken\w*|kedvezmény\w*)",
+    re.IGNORECASE,
+)
+
+_NUM_DATE_RE = re.compile(r"\b(20\d{2})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})\.?")
+_HU_MONTH_DATE_RE = re.compile(
+    r"\b(20\d{2})\.?\s*(január|február|március|április|május|június|július|augusztus|"
+    r"szeptember|október|november|december|january|february|march|april|may|june|july|"
+    r"august|september|october|november|december)\w*(?:\s*(\d{1,2})\.?)?",
+    re.IGNORECASE,
+)
+_EN_DMY_DATE_RE = re.compile(
+    r"\b(\d{1,2})\s+(january|february|march|april|may|june|july|august|"
+    r"september|october|november|december)\s+(20\d{2})\b",
+    re.IGNORECASE,
+)
+_YEAR_ONLY_EFFECTIVE_RE = re.compile(
+    r"\b(202[6-9]|203\d)(?:\s*[-–]?(?:től|tól|t[őo]l))?\s+(?:hatályos|hatályba\s+lép\w*|"
+    r"lép\s+hatályba|változ\w*\s+fog|változik|módosul\w*|lép\s+életbe)",
+    re.IGNORECASE,
+)
+
+
+def _safe_date(year: int, month: int, day: int) -> date | None:
+    try:
+        if 2000 <= year <= 2040:
+            return date(year, month, day)
+    except ValueError:
+        return None
+    return None
+
+
+def extract_effective_date(
+    title: str,
+    summary: str = "",
+    today: date | None = None,
+) -> str:
+    """Hatálybalépési / jogszabály-változási dátum kinyerése (ISO YYYY-MM-DD)."""
+    ref_today = today or date.today()
+    clean_text = strip_nav_boilerplate(f"{normalize_whitespace(title)} {normalize_whitespace(summary)}")
+    if not clean_text:
+        return ""
+
+    has_change_cue = bool(_LEGISLATIVE_CHANGE_CUE_RE.search(clean_text))
+    explicit_dates: list[date] = []
+    future_dates: list[date] = []
+
+    def consider(d: date | None, start: int, end: int) -> None:
+        if d is None:
+            return
+        ctx_window = clean_text[max(0, start - 55) : min(len(clean_text), end + 55)]
+        if _EFFECTIVE_CONTEXT_RE.search(ctx_window):
+            explicit_dates.append(d)
+        elif d > ref_today and has_change_cue:
+            future_dates.append(d)
+
+    for m in _NUM_DATE_RE.finditer(clean_text):
+        d = _safe_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        consider(d, m.start(), m.end())
+
+    for m in _HU_MONTH_DATE_RE.finditer(clean_text):
+        month_num = _MONTH_MAP.get(strip_accents(m.group(2).lower()))
+        if month_num:
+            day_num = int(m.group(3)) if m.group(3) else 1
+            d = _safe_date(int(m.group(1)), month_num, day_num)
+            consider(d, m.start(), m.end())
+
+    for m in _EN_DMY_DATE_RE.finditer(clean_text):
+        month_num = _MONTH_MAP.get(m.group(2).lower())
+        if month_num:
+            d = _safe_date(int(m.group(3)), month_num, int(m.group(1)))
+            consider(d, m.start(), m.end())
+
+    for m in _YEAR_ONLY_EFFECTIVE_RE.finditer(clean_text):
+        d = _safe_date(int(m.group(1)), 1, 1)
+        if d is not None:
+            explicit_dates.append(d)
+
+    all_candidates = explicit_dates + future_dates
+    if not all_candidates:
+        return ""
+
+    upcoming = sorted(d for d in all_candidates if d > ref_today)
+    if upcoming:
+        return upcoming[0].isoformat()
+
+    recent_explicit = sorted((d for d in explicit_dates if d <= ref_today), reverse=True)
+    if recent_explicit and (ref_today - recent_explicit[0]).days <= 60:
+        return recent_explicit[0].isoformat()
+
+    return ""
+
+
+def compute_effective_status(effective_date: str, today: date | None = None) -> str:
+    """'upcoming' ha jövőbeli hatálybalépés, 'in_force' ha frissen (<=60 nap) hatályba lépett."""
+    if not effective_date:
+        return ""
+    try:
+        eff = date.fromisoformat(effective_date[:10])
+    except ValueError:
+        return ""
+    ref_today = today or date.today()
+    if eff > ref_today:
+        return "upcoming"
+    if (ref_today - eff) <= timedelta(days=60):
+        return "in_force"
+    return ""
+
+
+_CHANGE_SENTENCE_CUE_RE = re.compile(
+    r"(?:változ\w*|váltani|módosul\w*|módosít\w*|hatály\w*|életbe\s*lép\w*|bevezet\w*|"
+    r"emelked\w*|csökken\w*|megszűn\w*|bővül\w*|kedvezmény\w*|mentesség\w*|értékhatár\w*|"
+    r"kulcs\w*|százalék|%|ft\b|§|\d{4}\.\s*évi\s+[IVXLCDM]+|202[6-9]|203\d|com\s*\(\s*\d{4})",
+    re.IGNORECASE,
+)
+
+
+def extract_change_summary(
+    title: str,
+    summary: str = "",
+    effective_date: str = "",
+    max_items: int = 4,
+) -> list[str]:
+    """Konkrét módosítási/változási pontok kinyerése a címből és összefoglalóból."""
+    clean_title = normalize_whitespace(title)
+    clean_summary = strip_nav_boilerplate(summary)
+    if "NJT közvetlen jogszabály-figyelő" in clean_summary:
+        clean_summary = ""
+
+    raw_source = clean_summary if clean_summary else clean_title
+    if not raw_source:
+        return []
+
+    # Mondathatár, amely nem vágja szét a magyar dátumokat (pl. 2027. január 1.) és törvényszámokat (2007. évi)
+    parts = re.split(
+        r"[\n|•;]+|(?<![0-9])(?<!\bévi)(?<!\btv)(?<!\bsz)(?<!\bkorm)(?<!\brend)(?<!\bbek)(?<!\bdr)\.\s+",
+        raw_source,
+        flags=re.IGNORECASE,
+    )
+
+    bullets: list[str] = []
+    seen_low: set[str] = set()
+
+    def push_clause(clause: str) -> None:
+        c = normalize_whitespace(clause).strip(" -–:|•")
+        if len(c) < 14:
+            return
+        if c.lower() == clean_title.lower() and clean_summary:
+            return
+        if c.lower() not in seen_low:
+            seen_low.add(c.lower())
+            bullets.append(c[:240])
+
+    for p in parts:
+        p_clean = normalize_whitespace(p)
+        if _CHANGE_SENTENCE_CUE_RE.search(p_clean):
+            push_clause(p_clean)
+            if len(bullets) >= max_items:
+                break
+
+    # Ha csak a cím hordozza a konkrét változás-bejelentést és a leírásból nem jött pont
+    if not bullets and clean_title and _CHANGE_SENTENCE_CUE_RE.search(clean_title):
+        push_clause(clean_title)
+
+    # Ha van felismert hatálybalépési dátum, de a szövegből még nem került be dátumos sor
+    if effective_date and not any(effective_date[:4] in b for b in bullets):
+        formatted_date = effective_date.replace("-", ".") + "."
+        bullets.insert(0, f"Hatálybalépés / változás időpontja: {formatted_date}")
+
+    return bullets[:max_items]
 
 
 def compute_item_key(source_id: str, url: str, title: str) -> str:
@@ -405,6 +626,9 @@ class ClassificationResult:
     document_ref: str
     category_matches: list[CategoryMatch] = field(default_factory=list)
     matched_keywords: list[str] = field(default_factory=list)
+    effective_date: str = ""
+    effective_status: str = ""
+    change_summary: list[str] = field(default_factory=list)
 
 
 def _compile_custom_pattern(kw: str, use_accent_stripped: bool = False) -> re.Pattern[str]:
@@ -463,9 +687,10 @@ class TaxClassifier:
         url: str = "",
         jurisdiction: str = "HU",
         always_include_tax_context: bool = False,
+        today: date | None = None,
     ) -> ClassificationResult:
         clean_title = normalize_whitespace(title)
-        clean_summary = normalize_whitespace(summary)
+        clean_summary = strip_nav_boilerplate(summary)
         combined = f"{clean_title}\n{clean_summary}".strip()
         if not combined:
             return ClassificationResult(relevant=False, relevance_score=0, is_bill=False, document_ref="")
@@ -611,6 +836,10 @@ class TaxClassifier:
                 seen_final.add(k_low)
                 final_keywords.append(kw)
 
+        eff_date = extract_effective_date(clean_title, clean_summary, today=today)
+        eff_status = compute_effective_status(eff_date, today=today)
+        changes = extract_change_summary(clean_title, clean_summary, effective_date=eff_date)
+
         return ClassificationResult(
             relevant=True,
             relevance_score=total_score,
@@ -618,12 +847,16 @@ class TaxClassifier:
             document_ref=doc_ref,
             category_matches=matches,
             matched_keywords=final_keywords[:18],
+            effective_date=eff_date,
+            effective_status=eff_status,
+            change_summary=changes,
         )
 
     def enrich_candidate(
         self,
         candidate: RawCandidate,
         source: SourceConfig,
+        today: date | None = None,
     ) -> LegislativeItem | None:
         result = self.classify(
             title=candidate.title,
@@ -631,6 +864,7 @@ class TaxClassifier:
             url=candidate.url,
             jurisdiction=source.jurisdiction,
             always_include_tax_context=source.always_include_tax_context,
+            today=today,
         )
         if not result.relevant:
             return None
@@ -646,7 +880,18 @@ class TaxClassifier:
                 status_label = "Jogszabály / Tájékoztató"
 
         title = normalize_whitespace(candidate.title)
-        summary = normalize_whitespace(candidate.summary)
+        summary = strip_nav_boilerplate(candidate.summary)
+        eff_date = candidate.effective_date or result.effective_date
+        eff_status = compute_effective_status(eff_date, today=today) or result.effective_status
+
+        merged_changes: list[str] = []
+        seen_ch: set[str] = set()
+        for line in list(candidate.change_summary or []) + list(result.change_summary or []):
+            clean_line = normalize_whitespace(line)
+            if clean_line and clean_line.lower() not in seen_ch:
+                seen_ch.add(clean_line.lower())
+                merged_changes.append(clean_line[:240])
+
         item_key = compute_item_key(source.id, candidate.url, title)
         content_hash = compute_content_hash(title, summary, candidate.published_at, status_label)
 
@@ -667,6 +912,9 @@ class TaxClassifier:
             category_names=[m.category_name for m in result.category_matches],
             matched_keywords=result.matched_keywords,
             content_hash=content_hash,
+            effective_date=eff_date,
+            effective_status=eff_status,
+            change_summary=merged_changes[:5],
             raw_metadata=candidate.raw_metadata,
         )
 

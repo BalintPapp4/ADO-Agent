@@ -150,3 +150,53 @@ def test_custom_keywords_reclassify_existing_items_and_preserve_flags(tmp_path: 
     s_all = client.get("/api/state").get_json()
     assert len(s_all["items"]) == 2
 
+
+def test_web_search_hungarian_case_and_effective_changes_filter(tmp_path: Path):
+    from ado_agent.classifier import TaxClassifier
+    from ado_agent.models import RawCandidate
+
+    client, cfg, db = _test_client(tmp_path)
+    clf = TaxClassifier(custom_keywords=["gépjárműadó"])
+    net_src = next(s for s in cfg.sources if s.id == "net_jogtar_hu")
+
+    it_afa = clf.enrich_candidate(
+        RawCandidate(
+            title="2007. évi CXXVII. törvény az általános forgalmi adóról (áfa)",
+            url="https://net.jogtar.hu/jogszabaly?docid=a0700127.tv",
+            summary="2027. január 1-jétől hatályos e-nyugta és áfa-módosítás.",
+        ),
+        net_src,
+    )
+    it_gja = clf.enrich_candidate(
+        RawCandidate(
+            title="1991. évi LXXXII. törvény a gépjárműadóról",
+            url="https://net.jogtar.hu/jogszabaly?docid=99100082.tv",
+            summary="A Gépjárműadó mértékének változása.",
+        ),
+        net_src,
+    )
+    assert it_afa is not None and it_gja is not None
+    db.upsert_items([it_afa, it_gja])
+
+    r_upper = client.get("/api/state", query_string={"search": "Áfa"})
+    r_lower = client.get("/api/state", query_string={"search": "áfa"})
+    assert r_upper.status_code == 200 and r_lower.status_code == 200
+    assert [i["item_key"] for i in r_upper.get_json()["items"]] == [
+        i["item_key"] for i in r_lower.get_json()["items"]
+    ] == [it_afa.item_key]
+
+    r_gja = client.get("/api/state", query_string={"search": "gépjárműadó"})
+    assert r_gja.status_code == 200
+    assert len(r_gja.get_json()["items"]) == 1
+    assert r_gja.get_json()["items"][0]["item_key"] == it_gja.item_key
+
+    r_eff = client.get(
+        "/api/state",
+        query_string={"only_effective_changes": "1", "sort_by": "effective_date"},
+    )
+    assert r_eff.status_code == 200
+    eff_items = r_eff.get_json()["items"]
+    assert len(eff_items) == 1
+    assert eff_items[0]["effective_date"] == "2027-01-01"
+    assert eff_items[0]["effective_status"] == "upcoming"
+    assert r_eff.get_json()["stats"]["upcoming_changes_count"] == 1
