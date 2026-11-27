@@ -2,6 +2,8 @@
 
 Az **ADÓ Agent** egy **Windowsra (.exe)** és **macOS-re (.app + CLI)** egyaránt lefordítható, önállóan futtatható alkalmazás, amely figyeli és egy helyre gyűjti a magyar és európai uniós adózási törvényjavaslatokat, jogszabálytervezeteket és változásokat.
 
+Link: https://ado-agent-csoport.fly.dev/
+
 ---
 
 ## Figyelt témakörök
