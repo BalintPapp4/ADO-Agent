@@ -68,3 +68,47 @@ def test_upsert_diff_bookmarks_notes_and_filters(tmp_path: Path):
     marked = db.mark_all_read()
     assert marked == 1
     assert db.query_items(only_new=True) == []
+
+
+def test_flags_persist_across_db_reopen_and_rescan(tmp_path: Path):
+    db_file = tmp_path / "persist.db"
+    db1 = Database(db_file)
+    clf = TaxClassifier()
+    src = SourceConfig(
+        id="nav_gov_hu",
+        name="NAV",
+        adapter="nav",
+        url="https://nav.gov.hu/ado",
+        jurisdiction="HU",
+    )
+    cand = RawCandidate(
+        title="SZJA kedvezmények 2027",
+        url="https://nav.gov.hu/ado/szja-2027",
+        summary="Személyi jövedelemadó változások.",
+        published_at="2026-11-26",
+    )
+    it = clf.enrich_candidate(cand, src)
+    assert it is not None
+    db1.upsert_items([it])
+    db1.update_item_flags(it.item_key, is_read=True, is_bookmarked=True, notes="Következő havi ellenőrzés")
+
+    # Új Database példány nyitása (szimulálja a program újraindítását)
+    db2 = Database(db_file)
+    rows = db2.query_items()
+    assert len(rows) == 1
+    assert rows[0].is_read is True
+    assert rows[0].is_bookmarked is True
+    assert rows[0].notes == "Következő havi ellenőrzés"
+
+    # Újra-szkennelés változatlan tartalommal -> megmarad minden jelölés!
+    it2 = clf.enrich_candidate(cand, src)
+    assert it2 is not None
+    db2.upsert_items([it2])
+    rows_after = db2.query_items()
+    assert rows_after[0].is_read is True
+    assert rows_after[0].is_bookmarked is True
+    assert rows_after[0].notes == "Következő havi ellenőrzés"
+    stats = db2.get_stats()
+    assert stats["read_count"] == 1
+    assert stats["bookmarked_count"] == 1
+    assert stats["noted_count"] == 1

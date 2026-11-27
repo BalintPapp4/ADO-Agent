@@ -56,6 +56,7 @@
     newKwInput: document.getElementById("new-kw-input"),
     btnAddKw: document.getElementById("btn-add-kw"),
     customKwTags: document.getElementById("custom-kw-tags"),
+    chkRescanAfterKw: document.getElementById("chk-rescan-after-kw"),
     autoScanSelect: document.getElementById("auto-scan-select"),
     btnSaveSettings: document.getElementById("btn-save-settings"),
     modalUsers: document.getElementById("modal-users"),
@@ -73,21 +74,55 @@
       .replaceAll("'", "&#039;");
   }
 
+  function buildAccentTolerantPattern(kw) {
+    const map = {
+      a: "[aá]",
+      á: "[aá]",
+      e: "[eé]",
+      é: "[eé]",
+      i: "[ií]",
+      í: "[ií]",
+      o: "[oóöő]",
+      ó: "[oóöő]",
+      ö: "[oóöő]",
+      ő: "[oóöő]",
+      u: "[uúüű]",
+      ú: "[uúüű]",
+      ü: "[uúüű]",
+      ű: "[uúüű]",
+    };
+    return [...kw]
+      .map((ch) => {
+        const low = ch.toLowerCase();
+        if (kw.length >= 4 && map[low]) return map[low];
+        return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      })
+      .join("");
+  }
+
   function highlightText(rawText, keywords) {
-    let safe = escapeHtml(rawText || "");
-    if (!keywords || !keywords.length) return safe;
+    const text = String(rawText || "");
+    if (!text || !keywords || !keywords.length) return escapeHtml(text);
     const sorted = [...keywords]
       .filter((k) => k && k.length >= 2)
       .sort((a, b) => b.length - a.length)
-      .slice(0, 10);
-    for (const kw of sorted) {
-      const escapedKw = escapeHtml(kw).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      try {
-        const re = new RegExp(`(${escapedKw})`, "gi");
-        safe = safe.replace(re, "<mark>$1</mark>");
-      } catch (_) {}
+      .slice(0, 12);
+    if (!sorted.length) return escapeHtml(text);
+    try {
+      const combined = new RegExp(`(${sorted.map(buildAccentTolerantPattern).join("|")})`, "gi");
+      let out = "";
+      let lastIdx = 0;
+      for (const m of text.matchAll(combined)) {
+        const idx = m.index ?? 0;
+        if (idx > lastIdx) out += escapeHtml(text.slice(lastIdx, idx));
+        out += `<mark>${escapeHtml(m[0])}</mark>`;
+        lastIdx = idx + m[0].length;
+      }
+      if (lastIdx < text.length) out += escapeHtml(text.slice(lastIdx));
+      return out || escapeHtml(text);
+    } catch (_) {
+      return escapeHtml(text);
     }
-    return safe;
   }
 
   function showToast(msg) {
@@ -219,10 +254,21 @@
     const items = data.items || [];
     els.resultsCount.textContent = `Találatok (${items.length})`;
     if (!items.length) {
+      let emptyDetail =
+        "Kattints a fenti <strong>„Ellenőrzés most”</strong> gombra a magyar és EU-s oldalak lekérdezéséhez, vagy lazíts a szűrőkön.";
+      if (state.category === "egyeni") {
+        const kws = data.custom_keywords || [];
+        if (!kws.length) {
+          emptyDetail =
+            "Még nincs megadva egyéni kulcsszó. Nyisd meg felül a <strong>„⚙ Kulcsszavak &amp; Ütemezés”</strong> ablakot a saját kulcsszavaid felvételéhez.";
+        } else {
+          emptyDetail = `Aktív egyéni kulcsszavak: <strong>${escapeHtml(kws.join(", "))}</strong>. A jelenlegi szűrők mellett még nincs egyező cikk — kattints az <strong>„Ellenőrzés most”</strong> gombra vagy lazíts a szűrőkön.`;
+        }
+      }
       els.itemsList.innerHTML = `
         <div class="empty-state">
           <h3>Nincs megjeleníthető adózási találat</h3>
-          <p>Kattints a fenti <strong>„Ellenőrzés most”</strong> gombra a magyar és EU-s oldalak lekérdezéséhez, vagy lazíts a szűrőkön.</p>
+          <p>${emptyDetail}</p>
         </div>
       `;
       return;
@@ -628,29 +674,74 @@
     });
   }
 
-  els.btnAddKw.addEventListener("click", () => {
-    const kw = els.newKwInput.value.trim();
-    if (!kw) return;
-    if (!state.draftKeywords.some((k) => k.toLowerCase() === kw.toLowerCase())) {
-      state.draftKeywords.push(kw);
-      renderDraftKeywords();
+  function commitPendingKeywordInput() {
+    const raw = (els.newKwInput.value || "").trim();
+    if (!raw) return false;
+    let added = false;
+    for (const part of raw.split(/[,;]+/)) {
+      const kw = part.trim().replace(/\s+/g, " ");
+      if (!kw) continue;
+      if (!state.draftKeywords.some((k) => k.toLowerCase() === kw.toLowerCase())) {
+        state.draftKeywords.push(kw);
+        added = true;
+      }
     }
     els.newKwInput.value = "";
+    if (added) renderDraftKeywords();
+    return added;
+  }
+
+  els.btnAddKw.addEventListener("click", () => {
+    commitPendingKeywordInput();
+    els.newKwInput.focus();
+  });
+
+  els.newKwInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitPendingKeywordInput();
+    }
   });
 
   els.btnSaveSettings.addEventListener("click", async () => {
+    commitPendingKeywordInput();
+    const prevKeywords = ((state.data && state.data.custom_keywords) || [])
+      .map((k) => k.toLowerCase())
+      .join("\u0001");
+    const nextKeywords = state.draftKeywords.map((k) => k.toLowerCase()).join("\u0001");
+    const keywordsChanged = prevKeywords !== nextKeywords;
+    const shouldRescan = Boolean(
+      keywordsChanged && els.chkRescanAfterKw && els.chkRescanAfterKw.checked
+    );
+
     const res = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         custom_keywords: state.draftKeywords,
         auto_scan_interval_minutes: Number(els.autoScanSelect.value || 0),
+        rescan: shouldRescan,
       }),
     });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
     if (res.ok) {
+      const resData = await res.json();
       els.modalSettings.classList.add("hidden");
       await fetchState();
-      showToast("Beállítások mentve.");
+      if (resData.scan_started) {
+        startScanPolling();
+      }
+      const reclass = resData.reclassified || {};
+      if (state.draftKeywords.length) {
+        const matched = reclass.custom_matched || 0;
+        const suffix = resData.scan_started ? " Friss ellenőrzés is elindult a háttérben." : "";
+        showToast(`Beállítások mentve — ${matched} tárolt találat egyezik.${suffix}`);
+      } else {
+        showToast("Beállítások mentve.");
+      }
     }
   });
 

@@ -8,10 +8,12 @@ import json
 import secrets
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
+from .classifier import TaxClassifier
 from .models import LegislativeItem, ScanSummary
 
 
@@ -60,12 +62,17 @@ class Database:
         self._lock = threading.RLock()
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_schema(self) -> None:
         with self._lock, self._connect() as conn:
@@ -754,13 +761,112 @@ class Database:
             cur = conn.execute("DELETE FROM items")
             return cur.rowcount
 
+    def reclassify_items(
+        self,
+        classifier: TaxClassifier,
+        source_tax_context: dict[str, bool] | None = None,
+        source_names: dict[str, str] | None = None,
+    ) -> dict[str, int]:
+        """Meglévő tárolt elemek újracímkézése (pl. egyéni kulcsszavak mentésekor) állapotok megőrzésével."""
+        tax_ctx = source_tax_context or {}
+        src_names = source_names or {}
+        updated_rows = 0
+        custom_matched = 0
+
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT item_key, title, url, source_id, source_name, jurisdiction,
+                       summary, document_ref, relevance_score, is_bill,
+                       categories_json, category_names_json, matched_keywords_json
+                FROM items
+                """
+            ).fetchall()
+
+            for row in rows:
+                old_cats = json.loads(row["categories_json"] or "[]")
+                old_cat_names = json.loads(row["category_names_json"] or "[]")
+                old_kws = json.loads(row["matched_keywords_json"] or "[]")
+                always_tax = bool(
+                    tax_ctx.get(row["source_id"], "NAV / adóhatósági tájékoztató" in old_kws)
+                )
+                res = classifier.classify(
+                    title=row["title"],
+                    summary=row["summary"],
+                    url=row["url"],
+                    jurisdiction=row["jurisdiction"],
+                    always_include_tax_context=always_tax,
+                )
+
+                if res.relevant:
+                    new_cats = [m.category_id for m in res.category_matches]
+                    new_cat_names = [m.category_name for m in res.category_matches]
+                    new_kws = res.matched_keywords
+                    new_score = res.relevance_score
+                    new_bill = 1 if res.is_bill else 0
+                    new_doc_ref = res.document_ref or row["document_ref"]
+                else:
+                    # Ha korábban csak törölt egyéni kulcsszó miatt volt releváns, ne töröljük a sort
+                    # (olvasottság/megjegyzések megmaradnak), csak távolítsuk el az 'egyeni' címkét.
+                    new_cats = [c for c in old_cats if c != "egyeni"]
+                    new_cat_names = [n for n in old_cat_names if n != "Egyéni kulcsszavak"]
+                    new_kws = old_kws if not new_cats else [k for k in old_kws]
+                    new_score = int(row["relevance_score"])
+                    new_bill = int(row["is_bill"])
+                    new_doc_ref = row["document_ref"]
+
+                if "egyeni" in new_cats:
+                    custom_matched += 1
+
+                new_source_name = src_names.get(row["source_id"], row["source_name"]) or row["source_name"]
+
+                if (
+                    new_cats != old_cats
+                    or new_cat_names != old_cat_names
+                    or new_kws != old_kws
+                    or new_score != int(row["relevance_score"])
+                    or new_bill != int(row["is_bill"])
+                    or new_doc_ref != row["document_ref"]
+                    or new_source_name != row["source_name"]
+                ):
+                    conn.execute(
+                        """
+                        UPDATE items SET
+                            source_name = ?,
+                            categories_json = ?,
+                            category_names_json = ?,
+                            matched_keywords_json = ?,
+                            relevance_score = ?,
+                            is_bill = ?,
+                            document_ref = ?
+                        WHERE item_key = ?
+                        """,
+                        (
+                            new_source_name,
+                            json.dumps(new_cats, ensure_ascii=False),
+                            json.dumps(new_cat_names, ensure_ascii=False),
+                            json.dumps(new_kws, ensure_ascii=False),
+                            new_score,
+                            new_bill,
+                            new_doc_ref,
+                            row["item_key"],
+                        ),
+                    )
+                    updated_rows += 1
+
+        return {
+            "total_items": len(rows),
+            "updated_rows": updated_rows,
+            "custom_matched": custom_matched,
+        }
+
     def get_stats(self, user_id: int | None = None) -> dict[str, Any]:
         with self._lock, self._connect() as conn:
             if user_id is not None:
                 rows = conn.execute(
                     """
                     SELECT items.jurisdiction, items.source_id, items.is_bill,
-                           items.is_new, items.is_updated, items.categories_json,
+                           items.is_new, items.is_updated, items.categories_json, items.notes,
                            COALESCE(uis.is_read, 0) AS eff_read,
                            COALESCE(uis.is_bookmarked, 0) AS eff_bookmarked
                     FROM items
@@ -772,7 +878,7 @@ class Database:
             else:
                 rows = conn.execute(
                     """
-                    SELECT jurisdiction, source_id, is_bill, is_new, is_updated, categories_json,
+                    SELECT jurisdiction, source_id, is_bill, is_new, is_updated, categories_json, notes,
                            is_read AS eff_read, is_bookmarked AS eff_bookmarked
                     FROM items
                     """
@@ -782,7 +888,9 @@ class Database:
         new_count = sum(1 for r in rows if r["is_new"] and not r["eff_read"])
         updated_count = sum(1 for r in rows if r["is_updated"] and not r["eff_read"])
         unread_count = sum(1 for r in rows if not r["eff_read"])
+        read_count = sum(1 for r in rows if r["eff_read"])
         bookmarked_count = sum(1 for r in rows if r["eff_bookmarked"])
+        noted_count = sum(1 for r in rows if (r["notes"] or "").strip())
         bills_count = sum(1 for r in rows if r["is_bill"])
 
         by_jurisdiction: dict[str, int] = {"HU": 0, "EU": 0}
@@ -801,7 +909,9 @@ class Database:
             "new_count": new_count,
             "updated_count": updated_count,
             "unread_count": unread_count,
+            "read_count": read_count,
             "bookmarked_count": bookmarked_count,
+            "noted_count": noted_count,
             "bills_count": bills_count,
             "by_jurisdiction": by_jurisdiction,
             "by_category": by_category,

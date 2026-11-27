@@ -182,3 +182,35 @@ def test_partial_network_failure_does_not_crash_other_sources(tmp_path: Path):
     assert summary.failed_sources == 1
     assert summary.succeeded_sources >= 1
     assert summary.total_matched >= 5
+
+
+def test_nav_boilerplate_and_megamenu_not_attached_to_links():
+    from ado_agent.fetcher import extract_html_candidates
+
+    html = """
+    <html><body>
+      <nav class="main-menu">
+        <a href="/ugyfeliranytu">Ügyféliránytű</a>
+        <span>Adó kulcsok tárgyi adómentes tevékenységek Szociális hozzájárulási adó</span>
+      </nav>
+      <div class="disclaimer-box">
+        Felhívjuk szíves figyelmét, hogy ha a NAV következő oldalain 2018. január 1-je után közzétett
+        tájékoztatóknak megfelelően jár el, akkor az adózás rendjéről szóló 2017. évi CL. törvény 247. §-a
+        alapján jogkövetkezmény az Ön részére nem állapítható meg. A fentiek alkalmazása az esetleges adóhiány megfizetése alól nem mentesít.
+        <a href="/ugyfeliranytu/jogszabaly">Ügyféliránytű részletek</a>
+      </div>
+      <article class="news-card">
+        <h3><a href="/ado/uj-szja-szabaly">Új SZJA családi adókedvezmény 2027</a></h3>
+        <p>Fontos változások a személyi jövedelemadóban.</p>
+      </article>
+    </body></html>
+    """
+    cands = extract_html_candidates(html, "https://nav.gov.hu/ado")
+    titles = [c.title for c in cands]
+    assert "Ügyféliránytű" not in titles  # nav-ból kiszűrve
+    szja = [c for c in cands if "SZJA" in c.title]
+    assert len(szja) == 1
+    assert "2017. évi CL." not in szja[0].summary
+    discl = [c for c in cands if "Ügyféliránytű részletek" in c.title]
+    if discl:
+        assert "2017. évi CL." not in discl[0].summary

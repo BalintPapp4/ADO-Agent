@@ -321,6 +321,19 @@ def extract_json_candidates(json_text: str, base_url: str) -> list[RawCandidate]
     return candidates
 
 
+BOILERPLATE_RE = re.compile(
+    r"Felhívjuk szíves figyelmét,\s*hogy ha a NAV következő oldalain.*?nem mentesít\.?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def strip_boilerplate(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = BOILERPLATE_RE.sub("", text)
+    return normalize_whitespace(cleaned)
+
+
 def extract_html_candidates(
     html: str,
     base_url: str,
@@ -331,7 +344,7 @@ def extract_html_candidates(
     soup = BeautifulSoup(html, "lxml")
 
     # Navigációs zaj eltávolítása a pontosabb kinyeréshez (de csak ha marad tartalom)
-    for tag_name in ("script", "style", "noscript", "svg"):
+    for tag_name in ("script", "style", "noscript", "svg", "nav", "header", "footer"):
         for tag in soup.find_all(tag_name):
             tag.decompose()
 
@@ -364,8 +377,12 @@ def extract_html_candidates(
             return
         seen_keys.add(dedup_key)
 
+        clean_summary = strip_boilerplate(summary)
+        if clean_summary.lower() == clean_title.lower():
+            clean_summary = ""
+
         if not published_at:
-            dm = DATE_RE.search(f"{clean_title} {summary}")
+            dm = DATE_RE.search(f"{clean_title} {clean_summary}")
             if dm:
                 published_at = normalize_whitespace(dm.group(1))
 
@@ -373,22 +390,30 @@ def extract_html_candidates(
             RawCandidate(
                 title=clean_title[:350],
                 url=full_url,
-                summary=normalize_whitespace(summary)[:800],
+                summary=clean_summary[:800],
                 published_at=published_at[:60],
                 document_ref=document_ref,
             )
         )
 
-    # 1. Cikkek / kártyák / listaelemek
-    for container in soup.find_all(["article", "section", "li", "div"], class_=re.compile(r"(card|item|news|article|doc|result|hit|entry|list|iromany|kozlony)", re.I)):
-        a = container.find("a", href=True)
-        if not a:
+    # 1. Cikkek / kártyák / listaelemek (óvva a hatalmas menü-konténerektől)
+    for container in soup.find_all(
+        ["article", "section", "li", "div"],
+        class_=re.compile(r"(card|item|news|article|doc|result|hit|entry|iromany|kozlony)", re.I),
+    ):
+        if container.find_parent(class_=re.compile(r"(menu|nav|breadcrumb|cookie|disclaimer)", re.I)):
+            continue
+        links_in_container = container.find_all("a", href=True)
+        if not links_in_container or len(links_in_container) > 5:
+            continue
+        a = links_in_container[0]
+        container_text = normalize_whitespace(container.get_text(" ", strip=True))
+        if len(container_text) > 1600:
             continue
         heading = container.find(["h1", "h2", "h3", "h4", "strong"])
         title = heading.get_text(" ", strip=True) if heading else a.get_text(" ", strip=True)
         if len(normalize_whitespace(title)) < min_title_len:
             title = a.get_text(" ", strip=True)
-        container_text = normalize_whitespace(container.get_text(" ", strip=True))
         summary = container_text.replace(normalize_whitespace(title), "", 1).strip(" -|–:")
         time_tag = container.find("time")
         pub = ""
@@ -414,14 +439,19 @@ def extract_html_candidates(
             doc_ref = ""
         push_candidate(title, a["href"], summary=row_text, document_ref=doc_ref)
 
-    # 3. Általános linkek a fő tartalomban (navigáción kívül)
+    # 3. Általános linkek a fő tartalomban (navigáción és óriás-menükön kívül)
     for a in soup.find_all("a", href=True):
-        if a.find_parent(["nav", "footer"]):
+        if a.find_parent(["nav", "header", "footer", "aside"]):
+            continue
+        if a.find_parent(class_=re.compile(r"(menu|nav|header|footer|breadcrumb|cookie|disclaimer|sidebar)", re.I)):
             continue
         title = a.get_text(" ", strip=True)
         parent_text = ""
         if a.parent:
-            parent_text = normalize_whitespace(a.parent.get_text(" ", strip=True))
+            sibling_links = a.parent.find_all("a", href=True)
+            raw_parent = normalize_whitespace(a.parent.get_text(" ", strip=True))
+            if len(sibling_links) <= 2 and len(raw_parent) <= 480:
+                parent_text = raw_parent
         push_candidate(title, a["href"], summary=parent_text)
 
     return candidates

@@ -203,10 +203,13 @@
         <h4>Egyéni kulcsszavak</h4>
         <p class="muted">Ha saját szakterületi adót vagy kifejezést is figyelni szeretnél (pl. <em>gyógyszerkülönadó</em>, <em>kiskereskedelmi adó</em>, <em>e-nyugta</em>), írd be alább:</p>
         <div class="kw-add-row">
-          <input id="new-kw-input" type="text" placeholder="Új kulcsszó vagy kifejezés...">
+          <input id="new-kw-input" type="text" placeholder="Új kulcsszó vagy kifejezés (több is megadható vesszővel)...">
           <button id="btn-add-kw" class="btn btn-secondary" type="button">+ Hozzáadás</button>
         </div>
         <div id="custom-kw-tags" class="kw-tags"></div>
+        <label class="toggle-chip" style="margin-top: 10px;">
+          <input type="checkbox" id="chk-rescan-after-kw" checked> Kulcsszóváltozáskor a források azonnali frissítése (új cikkekhez is)
+        </label>
 
         <hr>
         <h4>Automatikus háttér-ellenőrzés</h4>

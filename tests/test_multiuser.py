@@ -59,3 +59,53 @@ def test_per_user_read_bookmarks_and_comments(tmp_path: Path):
     except PermissionError:
         pass
     assert db.delete_comment(c2["id"], requester_user_id=u2["id"], is_admin=False) is True
+
+
+def test_multiuser_startup_reclassifies_custom_keywords_and_preserves_user_states(tmp_path: Path):
+    from ado_agent.config import AppConfig
+    from ado_agent.web.server import create_app
+
+    cfg = AppConfig(data_dir=tmp_path)
+    cfg.custom_keywords = ["e-nyugta"]
+    cfg.save()
+
+    db = Database(cfg.db_path)
+    u1 = db.create_user("balint", "Titok123", display_name="Papp Bálint", is_admin=True)
+    db.upsert_items(
+        [
+            LegislativeItem(
+                item_key="enyugta_1",
+                title="E-nyugtázás technikai útmutató",
+                url="https://nav.gov.hu/ado/e-nyugta",
+                source_id="nav_gov_hu",
+                source_name="NAV",
+                jurisdiction="HU",
+                summary="Új e-nyugta követelmények az áfa alanyoknak.",
+                categories=["egyeb_ado"],
+                category_names=["Adózás általános"],
+                matched_keywords=["áfa"],
+                content_hash="hash_en",
+            )
+        ]
+    )
+    db.update_item_flags("enyugta_1", is_read=True, is_bookmarked=True, user_id=u1["id"])
+    db.add_comment("enyugta_1", "Fontos az ügyfeleknek", user_id=u1["id"], author_name="Papp Bálint")
+
+    # Szerver induláskor újracímkézi a meglévő adatbázist az elmentett egyéni kulcsszavak alapján
+    app = create_app(cfg, db, auth_enabled=True)
+    app.config["TESTING"] = True
+    client = app.test_client()
+
+    r_login = client.post("/api/auth/login", json={"username": "balint", "password": "Titok123"})
+    assert r_login.status_code == 200
+
+    r_state = client.get("/api/state?category=egyeni")
+    assert r_state.status_code == 200
+    data = r_state.get_json()
+    assert data["stats"]["by_category"]["egyeni"] == 1
+    assert len(data["items"]) == 1
+    it = data["items"][0]
+    assert it["is_read"] is True
+    assert it["is_bookmarked"] is True
+    assert len(it["comments"]) == 1
+
